@@ -14,6 +14,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Color
@@ -37,7 +39,6 @@ import android.webkit.MimeTypeMap
 import android.webkit.WebView
 import org.json.JSONArray
 import org.json.JSONObject
-import androidx.documentfile.provider.DocumentFile
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -201,7 +202,7 @@ class MainActivity : Activity() {
     private val GITHUB_FOLDER_PICK_REQUEST = 12802
     private var githubFolderUri: Uri? = null
     private var githubFolderLabel: TextView? = null
-    private var githubFolderFiles: List<Pair<String, DocumentFile>> = emptyList()
+    private var githubFolderPreview: TextView? = null
     private var githubZipUri: Uri? = null
     private var githubZipLabel: TextView? = null
     private var githubUploadStatus: TextView? = null
@@ -219,7 +220,7 @@ class MainActivity : Activity() {
 
 
     private val homeTools = listOf(
-        "workspace" to "Workspace Center", "plugincenter" to "Plugin Center", "filemanager" to "File Manager", "recentfiles" to "Recent Files", "backuprestore" to "Backup / Restore", "editor" to "Editor", "reminder" to "Notifikasi", "zip" to "ZIP / UNZIP", "githubzip" to "GitHub Folder Publisher",
+        "workspace" to "Workspace Center", "plugincenter" to "Plugin Center", "filemanager" to "File Manager", "recentfiles" to "Recent Files", "backuprestore" to "Backup / Restore", "editor" to "Editor", "reminder" to "Notifikasi", "zip" to "ZIP / UNZIP", "githubzip" to "GitHub Publisher",
         "wifi" to "Wi-Fi Info", "json" to "JSON Tools", "hash" to "Hash Generator",
         "base64" to "Base64", "url" to "URL Tools", "regex" to "Regex Tester",
         "uuid" to "UUID Generator", "color" to "Color Tools", "number" to "Kalkulator Lengkap",
@@ -408,6 +409,9 @@ class MainActivity : Activity() {
         navFavorite = findViewById(R.id.navFavorite)
         navFavorite.setOnClickListener { navigateRoot { showFavorites() } }
         findViewById<View>(R.id.navSettings).setOnClickListener { navigateRoot { showSettings() } }
+        listOf(R.id.navHome, R.id.navTools, R.id.navFavorite, R.id.navSettings, R.id.navAdd).forEach { id ->
+            addPressFeedback(findViewById(id))
+        }
         findViewById<View>(R.id.navAdd).setOnClickListener { showAllTools() }
         homeMenu.setOnClickListener { showAbout() }
         homeProfile.setOnClickListener { showAbout() }
@@ -443,14 +447,30 @@ class MainActivity : Activity() {
                 STEGO_DECODE_PICK -> { stegoImageUri = data.data; decodeStegoFromUri(data.data!!); return }
                 CERT_PICK -> { certFileUri = data.data; viewCertificate(data.data!!); return }
                 GITHUB_FOLDER_PICK_REQUEST -> {
-                    val treeUri = data.data!!
-                    githubFolderUri = treeUri
-                    runCatching {
-                        contentResolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    githubFolderUri = data.data
+                    data.data?.let { uri ->
+                        runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                        val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, uri)
+                        githubFolderLabel?.text = doc?.name ?: "Folder dipilih"
+                        githubFolderPreview?.text = "Memindai isi folder…"
+                        thread {
+                            val names = mutableListOf<String>()
+                            fun scan(d: androidx.documentfile.provider.DocumentFile, prefix: String) {
+                                d.listFiles().forEach { child ->
+                                    val n = child.name ?: return@forEach
+                                    if (n == ".git" || n == "__MACOSX" || n == ".DS_Store" || n == "Thumbs.db") return@forEach
+                                    val rel = if (prefix.isBlank()) n else "$prefix/$n"
+                                    if (child.isDirectory) scan(child, rel) else if (child.isFile) names.add(rel)
+                                }
+                            }
+                            runCatching { if (doc != null) scan(doc, "") }
+                            runOnUiThread {
+                                val shown = names.take(12).joinToString("\n")
+                                githubFolderPreview?.text = "${names.size} file ditemukan" + if (shown.isNotBlank()) "\n$shown" + if (names.size > 12) "\n… dan ${names.size - 12} file lainnya" else "" else "\nFolder kosong atau tidak bisa dibaca"
+                                githubUploadStatus?.text = "Folder dipilih. Periksa daftar file, lalu tekan Simpan & Upload."
+                            }
+                        }
                     }
-                    githubFolderLabel?.text = "Folder: ${DocumentFile.fromTreeUri(this, treeUri)?.name ?: "Folder dipilih"}"
-                    githubUploadStatus?.text = "Membaca isi folder..."
-                    scanGithubFolder(treeUri)
                     return
                 }
                 GITHUB_ZIP_PICK_REQUEST -> {
@@ -460,7 +480,8 @@ class MainActivity : Activity() {
                     githubZipPreviewFiles = emptyList()
                     githubZipPreviewDirs = emptyList()
                     val name = data.data?.let { queryName(it) } ?: "ZIP dipilih"
-                    githubZipLabel?.text = "ZIP: ${name}"
+                    val zipSize = data.data?.let { u -> runCatching { contentResolver.openFileDescriptor(u, "r")?.use { it.statSize } }.getOrNull() } ?: -1L
+                    githubZipLabel?.text = if (zipSize > 0) "$name • ${ghFormatBytes(zipSize)}" else name
                     githubUploadStatus?.text = "Menganalisis struktur ZIP..."
                     data.data?.let { prepareGithubZipPreview(it) }
                     return
@@ -1282,28 +1303,63 @@ class MainActivity : Activity() {
         animateToolChildren(container, fromIndex)
     }
 
+    /**
+     * Shared UI surface used by tool cards. Keeps the whole app visually
+     * consistent while giving touchable surfaces real depth and feedback.
+     */
+    private fun applyInteractiveSurface(view: View, radius: Int = 16, elevation: Int = 2) {
+        val base = bg(panel2, radius, line)
+        val rippleColor = if (isDarkTheme) Color.argb(42, 255, 255, 255) else Color.argb(30, 0, 0, 0)
+        view.background = RippleDrawable(ColorStateList.valueOf(rippleColor), base, bg(Color.WHITE, radius))
+        view.elevation = dp(elevation).toFloat()
+        view.isClickable = true
+        view.isFocusable = true
+        view.stateListAnimator = null
+    }
+
+    private fun addPressFeedback(view: View) {
+        view.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    v.animate().scaleX(0.985f).scaleY(0.985f).setDuration(70).start()
+                }
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(100).start()
+                }
+            }
+            false
+        }
+    }
+
     private fun toolCard(id: String, name: String, icon: String = "▣", compact: Boolean = false): LinearLayout {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(if (compact) 10 else 14), dp(10), dp(if (compact) 10 else 14), dp(10))
-            background = bg(panel2, 16)
-            isClickable = true
-            setOnClickListener { openToolWithPress(id, this) }
+            minimumHeight = dp(if (compact) 60 else 68)
+            setPadding(dp(if (compact) 12 else 14), dp(10), dp(if (compact) 12 else 14), dp(10))
+            contentDescription = "$name. Buka alat"
         }
+        applyInteractiveSurface(card, if (compact) 14 else 17, if (compact) 1 else 2)
+        addPressFeedback(card)
+        card.setOnClickListener { openToolWithPress(id, card) }
+
         val ico = MdiIconView(this).apply {
             setIconName(icon)
             setIconSize(if (compact) 18f else 20f)
             setTextColor(Color.WHITE)
-            background = bg(Color.rgb(22,22,24), 12)
+            background = bg(Color.rgb(22,22,24), if (compact) 11 else 13)
         }
         card.addView(ico, LinearLayout.LayoutParams(dp(if (compact) 38 else 44), dp(if (compact) 38 else 44)))
         val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12),0,0,0) }
         texts.addView(label(name, if (compact) 14f else 15f, true))
         texts.addView(subLabel("Buka alat", 11f))
         card.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
-        val arrow = TextView(this).apply { text = "›"; textSize = 24f; setTextColor(textMuted) }
-        card.addView(arrow, LinearLayout.LayoutParams(dp(28), -1))
+        val arrow = TextView(this).apply {
+            text = "›"; textSize = 24f; setTextColor(textMuted); gravity = Gravity.CENTER
+            contentDescription = "Buka $name"
+        }
+        card.addView(arrow, LinearLayout.LayoutParams(dp(30), -1))
         return card
     }
 
@@ -1312,9 +1368,12 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(4), dp(10), dp(4), dp(8))
-            background = bg(panel2, 14)
-            setOnClickListener { openToolWithPress(id, this) }
+            minimumHeight = dp(88)
+            contentDescription = "$name. Favorit"
         }
+        applyInteractiveSurface(card, 15, 1)
+        addPressFeedback(card)
+        card.setOnClickListener { openToolWithPress(id, card) }
         val ico = MdiIconView(this).apply {
             setIconName(icon)
             setIconSize(22f)
@@ -1506,7 +1565,7 @@ class MainActivity : Activity() {
     // Registry update tool: setiap kali versi tool berubah, tool otomatis masuk ke bagian "Terbaru".
     // Untuk rilis berikutnya cukup naikkan versi pada entry terkait.
     private val toolUpdateCatalog = linkedMapOf(
-        "githubzip" to "2.28.0",
+        "githubzip" to "2.30.0",
         "webhostwifi" to "2.19.8",
         "webproject" to "2.19.8",
         "webeditor" to "2.19.8",
@@ -1562,11 +1621,11 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(9), dp(8), dp(7))
-            background = bg(Color.WHITE, 18, Color.rgb(225, 227, 230))
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { openToolWithPress(id, this) }
+            contentDescription = "$name. Tool terbaru"
         }
+        applyInteractiveSurface(card, 18, 2)
+        addPressFeedback(card)
+        card.setOnClickListener { openToolWithPress(id, card) }
         val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         top.addView(MdiIconView(this@MainActivity).apply {
             setIconName(iconFor(id)); setIconSize(21f); setTextColor(Color.WHITE)
@@ -1595,39 +1654,40 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(13), dp(10), dp(9), dp(9))
-            background = bg(Color.WHITE, 18, Color.rgb(225, 227, 230))
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { openToolWithPress(id, this) }
+            contentDescription = "$name. Tool"
         }
+        applyInteractiveSurface(card, 18, 2)
+        addPressFeedback(card)
+        card.setOnClickListener { openToolWithPress(id, card) }
         val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        val accent = View(this).apply { background = bg(Color.rgb(25,25,27), 3) }
+        val accent = View(this).apply { background = bg(if (isDarkTheme) Color.rgb(90,90,96) else Color.rgb(25,25,27), 3) }
         top.addView(accent, LinearLayout.LayoutParams(dp(4), dp(38)).apply { rightMargin = dp(8) })
         val icon = MdiIconView(this).apply {
             setIconName(iconFor(id))
             setIconSize(22f)
             setTextColor(Color.WHITE)
             setPadding(dp(6), dp(6), dp(6), dp(6))
-            background = bg(Color.rgb(25,25,27), 12, Color.rgb(25,25,27))
+            background = bg(if (isDarkTheme) Color.rgb(42,42,46) else Color.rgb(25,25,27), 12)
         }
         top.addView(icon, LinearLayout.LayoutParams(dp(38), dp(38)))
         top.addView(Space(this), LinearLayout.LayoutParams(0, 1, 1f))
         top.addView(TextView(this).apply {
             text = if (isFavorite(id)) "★" else "☆"; textSize = 19f; gravity = Gravity.CENTER
-            setTextColor(Color.rgb(30,30,32)); setPadding(dp(2),0,dp(2),0)
-            setOnClickListener { toggleFavorite(id); text = if (isFavorite(id)) "★" else "☆" }
+            setTextColor(textMain); setPadding(dp(2),0,dp(2),0)
+            contentDescription = if (isFavorite(id)) "Hapus $name dari favorit" else "Tambahkan $name ke favorit"
+            setOnClickListener { toggleFavorite(id); text = if (isFavorite(id)) "★" else "☆"; contentDescription = if (isFavorite(id)) "Hapus $name dari favorit" else "Tambahkan $name ke favorit" }
         }, LinearLayout.LayoutParams(dp(30), dp(38)))
         top.addView(TextView(this).apply {
             text = "›"
             textSize = 22f
-            setTextColor(Color.rgb(138, 138, 142))
+            setTextColor(textMuted)
             gravity = Gravity.CENTER
         }, LinearLayout.LayoutParams(dp(24), dp(38)))
         card.addView(top)
         card.addView(TextView(this).apply {
             text = name
             textSize = 13.5f
-            setTextColor(Color.rgb(17, 17, 17))
+            setTextColor(textMain)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             maxLines = 2
             setPadding(0, dp(8), 0, 0)
@@ -1635,7 +1695,7 @@ class MainActivity : Activity() {
         card.addView(TextView(this).apply {
             text = theme.chip
             textSize = 8.5f
-            setTextColor(Color.rgb(105,105,110))
+            setTextColor(textMuted)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             letterSpacing = 0.08f
         }, LinearLayout.LayoutParams(-1, dp(15)))
@@ -1684,9 +1744,14 @@ class MainActivity : Activity() {
         text = textValue
         textSize = 11f
         gravity = Gravity.CENTER
+        minHeight = dp(38)
         setTextColor(if (active) Color.WHITE else textMain)
-        background = bg(if (active) Color.rgb(15, 15, 16) else Color.rgb(241, 244, 246), 22)
+        val fill = if (active) (if (isDarkTheme) Color.WHITE else Color.rgb(15,15,16)) else (if (isDarkTheme) Color.rgb(42,42,46) else Color.rgb(241,244,246))
+        background = bg(fill, 22)
+        setTextColor(if (active) (if (isDarkTheme) Color.BLACK else Color.WHITE) else textMain)
         isClickable = true
+        isFocusable = true
+        contentDescription = "Filter $textValue${if (active) ", aktif" else ""}"
         setOnClickListener { onClick() }
     }
 
@@ -1727,12 +1792,34 @@ class MainActivity : Activity() {
 
     private fun showFavorites() {
         clearPage("favorites", false)
-        content.addView(label("Tools favorit", 21f, true))
-        content.addView(subLabel("Akses cepat ke tool yang paling sering digunakan.", 12f).apply { setPadding(dp(2), 0, 0, dp(12)) })
-        listOf(
-            "filemanager" to "File Manager", "recentfiles" to "Recent Files", "backuprestore" to "Backup / Restore", "editor" to "Editor", "number" to "Kalkulator Lengkap",
-            "qr" to "QR Generator", "password" to "Password Generator", "compare" to "Bandingkan Teks"
-        ).forEach { (id, name) ->
+        content.setPadding(dp(12), dp(8), dp(12), dp(18))
+        val favorites = favoriteToolIds().mapNotNull { id -> homeToolMap[id]?.let { id to it } }
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(10)) }
+        header.addView(label("Favorit", 22f, true), LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(TextView(this).apply {
+            text = "${favorites.size}/30"
+            textSize = 11f
+            setTextColor(textMuted)
+            background = bg(if (isDarkTheme) Color.rgb(42,42,46) else Color.rgb(241,244,246), 14)
+            setPadding(dp(9), dp(5), dp(9), dp(5))
+        })
+        content.addView(header)
+        content.addView(subLabel(if (favorites.isEmpty()) "Tool yang kamu tandai akan muncul di sini." else "Akses cepat ke tool yang paling sering kamu gunakan.", 12f).apply { setPadding(dp(2), 0, 0, dp(14)) })
+        if (favorites.isEmpty()) {
+            val empty = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(24), dp(38), dp(24), dp(38))
+                contentDescription = "Belum ada tool favorit"
+            }
+            applyInteractiveSurface(empty, 20, 1)
+            empty.addView(MdiIconView(this).apply { setIconName("star-outline"); setIconSize(38f); setTextColor(textMuted) }, LinearLayout.LayoutParams(-1, dp(50)))
+            empty.addView(label("Belum ada favorit", 16f, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, dp(2)) })
+            empty.addView(subLabel("Tekan ☆ pada kartu tool untuk menyimpannya.", 11f).apply { gravity = Gravity.CENTER })
+            content.addView(empty, LinearLayout.LayoutParams(-1, dp(170)).apply { topMargin = dp(6) })
+            return
+        }
+        favorites.forEach { (id, name) ->
             content.addView(toolCard(id, name, iconFor(id)).apply {
                 layoutParams = LinearLayout.LayoutParams(-1, dp(70)).apply { bottomMargin = dp(8) }
             })
@@ -1740,15 +1827,27 @@ class MainActivity : Activity() {
     }
 
     private fun selectBottomNav(name: String) {
-        val active = Color.rgb(15, 15, 16)
-        val inactive = Color.rgb(138, 150, 163)
-        val map = listOf(
+        val active = if (isDarkTheme) Color.WHITE else Color.rgb(15, 15, 16)
+        val inactive = if (isDarkTheme) Color.rgb(155, 155, 160) else Color.rgb(138, 150, 163)
+        val navItems = listOf(
+            R.id.navHome to (name == "home"),
+            R.id.navTools to (name == "all"),
+            R.id.navFavorite to (name == "favorites"),
+            R.id.navSettings to (name == "settings")
+        )
+        navItems.forEach { (id, selected) ->
+            val item = findViewById<View>(id)
+            item.background = if (selected) bg(if (isDarkTheme) Color.rgb(42,42,46) else Color.rgb(241,244,246), 20) else null
+            item.alpha = if (selected) 1f else 0.86f
+            item.animate().scaleX(if (selected) 1.02f else 1f).scaleY(if (selected) 1.02f else 1f).setDuration(140).start()
+        }
+        val labels = listOf(
             R.id.navHomeLabel to (name == "home"),
             R.id.navToolsLabel to (name == "all"),
             R.id.navFavoriteLabel to (name == "favorites"),
             R.id.navSettingsLabel to (name == "settings")
         )
-        map.forEach { (id, selected) -> findViewById<TextView>(id).setTextColor(if (selected) active else inactive) }
+        labels.forEach { (id, selected) -> findViewById<TextView>(id).setTextColor(if (selected) active else inactive) }
         val iconMap = listOf(
             R.id.navHomeIcon to (name == "home"),
             R.id.navToolsIcon to (name == "all"),
@@ -1764,18 +1863,27 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            background = bg(panel2, 15)
-            setOnClickListener { showCategory(name, ids) }
+            setPadding(dp(13), dp(10), dp(13), dp(10))
+            minimumHeight = dp(72)
+            contentDescription = "$name. ${ids.size} tools"
         }
-        val ico = TextView(this).apply { text = icon; textSize = 19f; gravity = Gravity.CENTER; setTextColor(textMain); background = bg(Color.rgb(242,245,247),12) }
-        card.addView(ico, LinearLayout.LayoutParams(dp(42), dp(42)))
-        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12),0,0,0) }
+        applyInteractiveSurface(card, 17, 2)
+        addPressFeedback(card)
+        card.setOnClickListener { showCategory(name, ids) }
+        val ico = TextView(this).apply {
+            text = icon
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setTextColor(textMain)
+            background = bg(if (isDarkTheme) Color.rgb(42,42,46) else Color.rgb(242,245,247), 14)
+        }
+        card.addView(ico, LinearLayout.LayoutParams(dp(46), dp(46)))
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(13),0,dp(8),0) }
         texts.addView(label(name, 14f, true))
         texts.addView(subLabel(desc, 11f))
         card.addView(texts, LinearLayout.LayoutParams(0,-2,1f))
-        card.addView(TextView(this).apply { text="›"; textSize=24f; setTextColor(textMuted) })
-        content.addView(card, LinearLayout.LayoutParams(-1, dp(66)).apply { bottomMargin = dp(7) })
+        card.addView(TextView(this).apply { text="›"; textSize=24f; setTextColor(textMuted); gravity=Gravity.CENTER; contentDescription="Buka kategori $name" }, LinearLayout.LayoutParams(dp(30), dp(46)))
+        content.addView(card, LinearLayout.LayoutParams(-1, dp(72)).apply { bottomMargin = dp(8) })
     }
 
     private fun showCategory(name: String, ids: List<String>) {
@@ -1802,6 +1910,30 @@ class MainActivity : Activity() {
         content.addView(subLabel("Pilih kategori untuk membuka tool. Tampilan ini dibuat ringan agar tetap lancar di HP.", 12f).apply {
             setPadding(0, 0, 0, dp(8))
         })
+        val allQuickFilters = listOf("Semua", "Favorit", "Text & Dev", "Security", "Network", "Files")
+        val quickRow = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val quickInner = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(2), 0, dp(10)) }
+        allQuickFilters.forEach { filter ->
+            val chip = homeChip(filter, filter == "Semua") {
+                when (filter) {
+                    "Semua" -> showAllTools()
+                    "Favorit" -> showFavorites()
+                    else -> {
+                        val title = when (filter) { "Text & Dev" -> "TEXT & DEV"; "Security" -> "SECURITY"; "Network" -> "NETWORK"; else -> "FILE & APP" }
+                        val ids = when (filter) {
+                            "Text & Dev" -> listOf("editor","json","jsonformat","xmlformat","yaml","toml","sql","regex","textstat","case","compare","base64","hex","url","unicode","timestamp","uuid")
+                            "Security" -> listOf("securitycenter","hash","checksum","password","passwordstrength","hmac","jwt","totp","aes","fileencryption","securenotes","pgp")
+                            "Network" -> listOf("network","networkstudio","dns","rdns","ping","traceroute","whois","port","netscanner","publicip","ipinfo","ssl","http","httpheaders","restclient","websocket")
+                            else -> listOf("filemanager","filestudio","zip","githubzip","fileconvert","filesearch","dedupe","storage","apps","apk","apkanalyzer","apkcompare","duplicatefinder","largefilefinder")
+                        }
+                        showCategory(title, ids)
+                    }
+                }
+            }
+            quickInner.addView(chip, LinearLayout.LayoutParams(dp(92), dp(38)).apply { rightMargin = dp(7) })
+        }
+        quickRow.addView(quickInner)
+        content.addView(quickRow, LinearLayout.LayoutParams(-1, dp(48)))
 
         val groups = linkedMapOf(
             "📁" to ("FILE & APP" to listOf("filemanager", "filestudio", "zip", "githubzip", "fileconvert", "filesearch", "dedupe", "storage", "apps", "apk", "apkanalyzer", "apkcompare", "duplicatefinder", "largefilefinder", "filehashcompare")),
@@ -2025,36 +2157,17 @@ class MainActivity : Activity() {
     }
 
     private fun iconFor(id: String): String = when (id) {
-        "filemanager" -> "folder"
-        "reminder" -> "bell-outline"
-        "fileconvert" -> "swap-horizontal"
+        "filemanager" -> "folder-outline"
+        "recentfiles" -> "history"
+        "backuprestore" -> "backup-restore"
+        "workspace" -> "view-dashboard-outline"
+        "plugincenter" -> "puzzle-outline"
+        "customtools" -> "tune-variant"
+        "studiocenter" -> "palette-swatch-outline"
         "editor" -> "file-document-edit-outline"
-        "terminal" -> "console"
-        "apkbuilder" -> "android"
-        "python" -> "language-python"
-        "tools" -> "wrench"
-        "zip" -> "folder-zip"
-        "githubzip" -> "github"
-        "http" -> "web"
-        "webhostwifi" -> "wifi-star"
-        "filehashcompare" -> "file-check-outline"
-        "markdown" -> "language-markdown-outline"
-        "sql" -> "database-search"
-        "yaml" -> "file-code-outline"
-        "toml" -> "file-cog-outline"
-        "cron" -> "calendar-clock"
-        "passwordstrength" -> "shield-lock-outline"
-        "stopwatch" -> "timer-outline"
-        "timer" -> "timer"
-        "imageinfo" -> "image-outline"
-        "imagetools" -> "image-edit-outline"
-        "restclient" -> "api"
-        "websocket" -> "connection"
-        "networkcenter" -> "lan-connect"
-        "systemcenter" -> "view-dashboard-outline"
-        "apkcompare" -> "compare-horizontal"
-        "duplicatefinder" -> "content-duplicate"
-        "largefilefinder" -> "file-search-outline"
+        "reminder" -> "bell-outline"
+        "zip" -> "folder-zip-outline"
+        "githubzip" -> "rocket-launch-outline"
         "wifi" -> "wifi"
         "json" -> "code-json"
         "hash" -> "pound"
@@ -2062,8 +2175,45 @@ class MainActivity : Activity() {
         "url" -> "link-variant"
         "regex" -> "regex"
         "uuid" -> "identifier"
-        "color" -> "palette"
-        "number" -> "calculator"
+        "color" -> "palette-outline"
+        "number" -> "calculator-variant-outline"
+        "history" -> "history"
+        "uicolorcalc" -> "palette-swatch-variant"
+        "basiccalc" -> "calculator"
+        "scicalc" -> "function-variant"
+        "percentcalc" -> "percent-outline"
+        "fractioncalc" -> "division"
+        "ratiocalc" -> "scale-balance"
+        "unitcalc" -> "ruler"
+        "areacalc" -> "vector-square"
+        "volumecalc" -> "cube-outline"
+        "speedcalc" -> "speedometer"
+        "timecalc" -> "clock-outline"
+        "datecalc" -> "calendar-range-outline"
+        "loancalc" -> "bank-outline"
+        "fuelcalc" -> "gas-station-outline"
+        "pivotcalc" -> "chart-areaspline"
+        "dividercalc" -> "sine-wave"
+        "dcacalc" -> "finance"
+        "pwmcalc" -> "pulse"
+        "spritecalc" -> "grid"
+        "installcalc" -> "cash-multiple"
+        "powercalc" -> "flash-outline"
+        "aspectcalc" -> "aspect-ratio"
+        "pphcalc" -> "percent"
+        "financereader" -> "wallet-outline"
+        "financedashboard" -> "chart-line"
+        "securitycenter" -> "shield-check-outline"
+        "helpbot" -> "robot-outline"
+        "riskcalc" -> "scale-balance"
+        "compoundcalc" -> "chart-timeline-variant"
+        "margincalc" -> "cash-register"
+        "discountcalc" -> "tag-outline"
+        "datacalc" -> "database-outline"
+        "pressurecalc" -> "gauge"
+        "worktimecalc" -> "briefcase-clock-outline"
+        "basecalc" -> "numeric"
+        "equationcalc" -> "sigma"
         "textstat" -> "format-list-numbered"
         "case" -> "format-letter-case"
         "dedupe" -> "content-duplicate"
@@ -2072,7 +2222,7 @@ class MainActivity : Activity() {
         "lorem" -> "format-align-left"
         "password" -> "form-textbox-password"
         "token" -> "key-variant"
-        "jwt" -> "code-json"
+        "jwt" -> "badge-account-outline"
         "hmac" -> "shield-key-outline"
         "totp" -> "clock-check-outline"
         "aes" -> "lock-outline"
@@ -2089,12 +2239,37 @@ class MainActivity : Activity() {
         "ssl" -> "certificate-outline"
         "apk" -> "android"
         "qr" -> "qrcode"
+        "fileconvert" -> "swap-horizontal"
         "system" -> "cog-outline"
+        "http" -> "web"
+        "webhostwifi" -> "wifi-star"
+        "filehashcompare" -> "file-compare"
+        "markdown" -> "language-markdown-outline"
+        "sql" -> "database-search-outline"
+        "yaml" -> "file-code-outline"
+        "toml" -> "file-cog-outline"
+        "cron" -> "calendar-clock-outline"
+        "passwordstrength" -> "shield-lock-outline"
+        "fileencryption" -> "file-lock-outline"
+        "steganography" -> "image-lock-outline"
+        "passwordanalyzer" -> "shield-search"
+        "breachchecker" -> "shield-alert-outline"
+        "securenotes" -> "note-edit-outline"
+        "totpvault" -> "shield-key-outline"
+        "pgp" -> "key-chain-variant"
+        "sshkeygen" -> "key-plus"
+        "certviewer" -> "certificate-outline"
+        "virusscanner" -> "bug-outline"
+        "urlsafety" -> "link-lock"
+        "stopwatch" -> "timer-outline"
+        "timer" -> "timer-sand"
+        "imageinfo" -> "image-search-outline"
+        "imagetools" -> "image-edit-outline"
         "timestamp" -> "clock-time-four-outline"
         "unicode" -> "format-letter-case-upper"
         "urlparser" -> "link-variant"
         "mime" -> "file-document-outline"
-        "jsonformat" -> "code-json"
+        "jsonformat" -> "code-braces"
         "xmlformat" -> "xml"
         "uuidbatch" -> "identifier"
         "base64file" -> "file-code-outline"
@@ -2107,40 +2282,47 @@ class MainActivity : Activity() {
         "network" -> "network"
         "battery" -> "battery-high"
         "filesearch" -> "file-search"
-        "pivotcalc" -> "chart-areaspline"
-        "dividercalc" -> "sine-wave"
-        "dcacalc" -> "finance"
-        "pwmcalc" -> "pulse"
-        "spritecalc" -> "grid"
-        "installcalc" -> "cash-multiple"
-        "uicolorcalc" -> "palette-outline"
-        "powercalc" -> "flash"
-        "aspectcalc" -> "aspect-ratio"
-        "pphcalc" -> "percent"
-        "financereader" -> "wallet-outline"
-        "financedashboard" -> "finance"
-        "securitycenter" -> "shield-check-outline"
         "clipboard" -> "clipboard-text-outline"
-        "ocr" -> "ocr"
-        "unitconverter" -> "swap-horizontal"
-        "apkanalyzer" -> "android-studio"
-        "netscanner" -> "magnify-scan"
         "esp" -> "chip"
-        "espdiscover" -> "access-point-network"
+        "espdiscover" -> "radar"
         "ledstudio" -> "led-strip"
         "espdevice" -> "devices"
-        "espgpio" -> "chip"
-        "espsensor" -> "chart-line"
+        "espgpio" -> "expansion-card-variant"
+        "espsensor" -> "thermometer"
         "espwifi" -> "router-wireless"
         "espota" -> "upload-network"
-        "esphttp" -> "web"
+        "esphttp" -> "web-box"
         "espmqtt" -> "message-cog-outline"
         "espusb" -> "usb-port"
         "espserial" -> "serial-port"
         "iotdashboard" -> "view-dashboard-outline"
         "espstudio" -> "tools"
         "visualwiring" -> "vector-polyline"
-        else -> "circle-small"
+        "ocr" -> "ocr"
+        "unitconverter" -> "swap-horizontal-bold"
+        "apkanalyzer" -> "android-studio"
+        "netscanner" -> "magnify-scan"
+        "webproject" -> "web-plus"
+        "webeditor" -> "language-html5"
+        "networkstudio" -> "lan"
+        "developerstudio" -> "code-tags"
+        "filestudio" -> "folder-multiple-outline"
+        "imagestudio" -> "image-multiple-outline"
+        "colorstudio" -> "palette"
+        "systemstudio" -> "cellphone-cog"
+        "financestudio" -> "cash-multiple"
+        "utilitystudio" -> "toolbox-outline"
+        "whois" -> "account-search-outline"
+        "traceroute" -> "routes"
+        "subnetcalc" -> "ip-network-outline"
+        "restclient" -> "api"
+        "websocket" -> "connection"
+        "networkcenter" -> "lan-connect"
+        "systemcenter" -> "view-dashboard-outline"
+        "apkcompare" -> "compare-horizontal"
+        "duplicatefinder" -> "file-multiple-outline"
+        "largefilefinder" -> "file-search-outline"
+        else -> "tools"
     }
     // Shared full-width input used by the tools.
     // Normal fields are deliberately taller and multiline fields get substantially
@@ -2153,6 +2335,12 @@ class MainActivity : Activity() {
         setPadding(dp(14), dp(10), dp(14), dp(10))
         val theme = visualTheme()
         background = bg(theme.surface, 14, theme.border)
+        isSingleLine = !multiline
+        isFocusable = true
+        isFocusableInTouchMode = true
+        setOnFocusChangeListener { view, focused ->
+            view.background = bg(if (focused) theme.surface else theme.surface, 14, if (focused) theme.button else theme.border)
+        }
         if (multiline) {
             minLines = 8
             gravity = Gravity.TOP or Gravity.START
@@ -2182,6 +2370,8 @@ class MainActivity : Activity() {
         isAllCaps = false
         letterSpacing = 0.01f
         alpha = 0.98f
+        contentDescription = text
+        isFocusable = true
         setOnClickListener { animate().scaleX(0.985f).scaleY(0.985f).setDuration(45).withEndAction { animate().scaleX(1f).scaleY(1f).setDuration(70).start() }.start(); onClick() }
         layoutParams = LinearLayout.LayoutParams(-1, dp(50)).apply { bottomMargin = dp(8) }
     }
@@ -2195,8 +2385,8 @@ class MainActivity : Activity() {
             setPadding(dp(14), dp(14), dp(14), dp(14))
             background = bg(panel2, 18, line)
         }
-        val iconView = TextView(this).apply {
-            text = icon; textSize = 20f; gravity = Gravity.CENTER; setTextColor(textMain)
+        val iconView = MdiIconView(this).apply {
+            setIconName(resolveToolIcon(titleText, icon)); setIconSize(22f); setTextColor(textMain)
             background = bg(panel, 14, line)
         }
         box.addView(iconView, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(12) })
@@ -2205,6 +2395,15 @@ class MainActivity : Activity() {
         texts.addView(subLabel(description, 11f))
         box.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
         return box
+    }
+
+    // Setiap tool wajib punya ikon: pakai nama ikon jika valid, kalau tidak cari dari nama tool.
+    private fun resolveToolIcon(titleText: String, icon: String): String {
+        if (MdiGlyphs.has(icon)) return icon
+        val exact = homeTools.firstOrNull { it.second.equals(titleText, true) }?.first
+        if (exact != null) return iconFor(exact)
+        val fuzzy = homeTools.firstOrNull { titleText.contains(it.second, true) || it.second.contains(titleText, true) }?.first
+        return if (fuzzy != null) iconFor(fuzzy) else "tools"
     }
 
     private fun toolSection(titleText: String, subtitle: String = ""): LinearLayout {
@@ -2225,6 +2424,31 @@ class MainActivity : Activity() {
 
     private fun addToolHeader(titleText: String, description: String, icon: String = "•") {
         content.addView(toolHeader(titleText, description, icon), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+    }
+
+    // V4: workspace helpers for complex tools. These keep domain logic untouched while
+    // giving network/file/security/system tools a consistent mobile workspace hierarchy.
+    private fun toolWorkspace(titleText: String, description: String, icon: String = "tools") {
+        addToolHeader(titleText, description, icon)
+        content.addView(toolControlBar(titleText), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
+    }
+
+    private fun toolWorkspaceSection(titleText: String, subtitle: String = "") {
+        content.addView(toolSection(titleText, subtitle))
+    }
+
+    private fun compactButtonRow(vararg items: Pair<String, () -> Unit>): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        items.forEachIndexed { index, item ->
+            val b = button(item.first, item.second)
+            row.addView(b, LinearLayout.LayoutParams(0, dp(50), 1f).apply {
+                if (index > 0) leftMargin = dp(5)
+            })
+        }
+        return row
     }
 
     // Shared controls for every tool: status, history and a contextual help panel.
@@ -2294,15 +2518,57 @@ class MainActivity : Activity() {
     private fun output(text: String) {
         val safe = text.ifBlank { "(kosong)" }
         if (!isSensitiveTool()) saveHistory(currentPage, safe)
-        val card = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(14),dp(12),dp(14),dp(10)); background=bg(panel2,15,line) }
-        card.addView(label(safe,14f))
-        val actions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
-        val copyButton=Button(this).apply { this.text="Salin"; setTextColor(textMain); background=bg(panel,10,line); setStateListAnimator(null); setOnClickListener { copyText(safe) } }
-        val share=Button(this).apply { this.text="Bagikan"; setTextColor(textMain); background=bg(panel,10,line); setStateListAnimator(null); setOnClickListener { shareText(safe) } }
-        actions.addView(copyButton,LinearLayout.LayoutParams(0,dp(44),1f).apply{rightMargin=dp(5)})
-        actions.addView(share,LinearLayout.LayoutParams(0,dp(44),1f).apply{leftMargin=dp(5)})
-        card.addView(actions,LinearLayout.LayoutParams(-1,dp(50)))
-        content.addView(card,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8);bottomMargin=dp(8)})
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(10))
+            background = bg(panel2, 16, line)
+            contentDescription = "Hasil $currentPage"
+        }
+        val heading = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val icon = MdiIconView(this).apply {
+            setIconName("check-circle-outline")
+            setIconSize(18f)
+            setTextColor(textMain)
+            background = bg(panel, 10, line)
+        }
+        heading.addView(icon, LinearLayout.LayoutParams(dp(34), dp(34)).apply { rightMargin = dp(9) })
+        val headingText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        headingText.addView(label("Hasil", 14f, true))
+        headingText.addView(subLabel("${currentPage} • siap digunakan", 10f))
+        heading.addView(headingText, LinearLayout.LayoutParams(0, -2, 1f))
+        card.addView(heading)
+
+        val result = TextView(this).apply {
+            text = safe
+            textSize = 14f
+            setTextColor(textMain)
+            setPadding(dp(12), dp(11), dp(12), dp(11))
+            background = bg(panel, 12, line)
+            isTextSelectable = true
+            gravity = Gravity.TOP or Gravity.START
+        }
+        card.addView(result, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(9); bottomMargin = dp(9) })
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        fun resultAction(textValue: String, onClick: () -> Unit): TextView = TextView(this).apply {
+            text = textValue
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(textMain)
+            background = bg(panel, 10, line)
+            minHeight = dp(44)
+            isClickable = true
+            isFocusable = true
+            contentDescription = textValue
+            setOnClickListener { onClick() }
+        }
+        actions.addView(resultAction("Salin") { copyText(safe) }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(4) })
+        actions.addView(resultAction("Bagikan") { shareText(safe) }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(4) })
+        card.addView(actions)
+        content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8); bottomMargin = dp(8) })
     }
 
     private fun copyText(value:String) {
@@ -2428,8 +2694,8 @@ class MainActivity : Activity() {
     }
 
     private fun showAbout() {
-        AlertDialog.Builder(this).setTitle("GITLS 2.28.0").setMessage(
-            "Native Android utility suite.\n\nVersi 2.28 menambahkan GitHub ZIP Publisher, perbaikan keyboard-safe navigation, dan Snap Search yang lebih responsif. Fitur V2.25 dan V2.26 tetap dipertahankan. Versi 2.23.0 menyatukan Editor dan Web Code Editor menjadi satu workspace kode HTML, CSS, dan JavaScript, memindahkan format JSON/CSV/Base64/XML dan lainnya ke menu (+), serta merapikan mode editor layar penuh agar fokus pada kode."
+        AlertDialog.Builder(this).setTitle("GITLS 2.30.0").setMessage(
+            "Native Android utility suite.\n\nVersi 2.30 mendesain ulang GitHub Publisher (pengaturan, proses upload animasi, dan halaman hasil) serta melengkapi ikon semua tools. Versi 2.28 menambahkan GitHub ZIP Publisher, perbaikan keyboard-safe navigation, dan Snap Search yang lebih responsif. Fitur V2.25 dan V2.26 tetap dipertahankan. Versi 2.23.0 menyatukan Editor dan Web Code Editor menjadi satu workspace kode HTML, CSS, dan JavaScript, memindahkan format JSON/CSV/Base64/XML dan lainnya ke menu (+), serta merapikan mode editor layar penuh agar fokus pada kode."
         ).setPositiveButton("OK", null).show()
     }
 
@@ -2605,8 +2871,8 @@ class MainActivity : Activity() {
 
     private fun restApiClientTool() {
         clearPage("REST / API Client")
-        content.addView(label("REST / API Client", 22f, true))
-        content.addView(subLabel("Kirim HTTP GET, POST, PUT, PATCH, DELETE dan lihat status, header, serta body respons.", 12f))
+        toolWorkspace("REST / API Client", "Kirim request HTTP dan periksa status, header, serta body respons.", "api")
+        toolWorkspaceSection("REQUEST", "Tentukan method dan endpoint terlebih dahulu.")
         val method = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, arrayOf("GET","POST","PUT","PATCH","DELETE","HEAD")) }
         val url = edit("https://example.com/api")
         val headers = edit("Headers (satu per baris: Name: Value)")
@@ -2650,8 +2916,8 @@ class MainActivity : Activity() {
 
     private fun webSocketClientTool() {
         clearPage("WebSocket Client")
-        content.addView(label("WebSocket Client", 22f, true))
-        content.addView(subLabel("Koneksi ws:// dan wss:// sederhana dengan text frame. Cocok untuk menguji endpoint WebSocket.", 12f))
+        toolWorkspace("WebSocket Client", "Hubungkan endpoint WebSocket, kirim pesan, terima frame, dan pantau log.", "connection")
+        toolWorkspaceSection("CONNECTION", "Gunakan ws:// atau wss:// lalu kontrol koneksi dari bawah.")
         val url = edit("ws://echo.websocket.events")
         val message = edit("Pesan")
         val log = edit("Log")
@@ -2711,7 +2977,8 @@ class MainActivity : Activity() {
 
     private fun networkCenterTool() {
         clearPage("Network Center")
-        content.addView(label("Network Center",22f,true)); content.addView(subLabel("Ringkasan koneksi, interface, gateway, DNS dan alamat lokal perangkat.",12f))
+        toolWorkspace("Network Center", "Ringkasan koneksi, interface, internet, dan alamat jaringan perangkat.", "lan-connect")
+        toolWorkspaceSection("NETWORK STATUS", "Informasi dibaca langsung dari sistem Android.")
         val cm=getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
         val n=cm.activeNetwork; val caps=if(n!=null)cm.getNetworkCapabilities(n) else null
         infoRow("Status", if(n!=null) "Terhubung" else "Tidak terhubung")
@@ -4222,8 +4489,8 @@ class MainActivity : Activity() {
 
     private fun apkAnalyzerTool() {
         clearPage("APK Analyzer Lengkap")
-        addToolHeader("APK Analyzer Lengkap", "Buka APK dan lihat informasi package, SDK, permission, DEX, native library, dan ZIP.", "APK")
-        content.addView(toolSection("ANALYSIS"))
+        toolWorkspace("APK Analyzer Lengkap", "Periksa package, SDK, permission, DEX, native library, signature, dan isi ZIP.", "android-studio")
+        toolWorkspaceSection("ANALYSIS", "Pilih APK lalu jalankan analisis. Hasil muncul di bawah.")
         content.addView(button("Pilih APK") {
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 type = "application/vnd.android.package-archive"; addCategory(Intent.CATEGORY_OPENABLE)
@@ -4317,7 +4584,8 @@ class MainActivity : Activity() {
 
     private fun networkScannerTool() {
         clearPage("Network Scanner")
-        addToolHeader("Network Scanner", "Cari host dan port terbuka pada subnet lokal.", "⌁")
+        toolWorkspace("Network Scanner", "Cari host dan port TCP terbuka pada subnet lokal.", "magnify-scan")
+        toolWorkspaceSection("SCAN CONFIG", "Tentukan subnet dan daftar port sebelum memulai scan.")
         val subnet = edit("Contoh 192.168.1.0/24")
         val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
         @Suppress("DEPRECATION")
@@ -4402,8 +4670,8 @@ class MainActivity : Activity() {
 
     private fun deviceInfoTool() {
         clearPage("Device Info")
-        content.addView(label("Informasi perangkat Android", 22f, true))
-        content.addView(subLabel("Data dibaca langsung dari sistem perangkat.", 12f))
+        toolWorkspace("Device Info", "Ringkasan perangkat Android, layar, ABI, RAM, dan build.", "cellphone-information")
+        toolWorkspaceSection("DEVICE", "Data dibaca langsung dari sistem perangkat.")
         val dm = resources.displayMetrics
         val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
         val mem = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
@@ -4417,8 +4685,8 @@ class MainActivity : Activity() {
 
     private fun storageAnalyzerTool() {
         clearPage("Storage Analyzer")
-        content.addView(label("Penyimpanan perangkat", 22f, true))
-        content.addView(subLabel("Ukuran filesystem utama dan folder aplikasi.", 12f))
+        toolWorkspace("Storage Analyzer", "Pantau penggunaan penyimpanan dan ukuran data MyTools.", "database")
+        toolWorkspaceSection("STORAGE", "Ukuran filesystem utama dan folder aplikasi.")
         val stat = StatFs(Environment.getDataDirectory().path)
         val total = stat.totalBytes
         val free = stat.availableBytes
@@ -4459,8 +4727,8 @@ class MainActivity : Activity() {
 
     private fun networkInfoTool() {
         clearPage("Network Info")
-        content.addView(label("Informasi jaringan", 22f, true))
-        content.addView(subLabel("Interface dan alamat jaringan yang tersedia.", 12f))
+        toolWorkspace("Network Info", "Interface dan alamat jaringan yang tersedia di perangkat.", "network")
+        toolWorkspaceSection("INTERFACES", "Daftar interface aktif dan alamatnya.")
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
             interfaces?.asSequence()?.filter { it.isUp && !it.isLoopback }?.forEach { ni ->
@@ -4479,8 +4747,8 @@ class MainActivity : Activity() {
 
     private fun batteryInfoTool() {
         clearPage("Battery Info")
-        content.addView(label("Status baterai", 22f, true))
-        content.addView(subLabel("Informasi dibaca dari BatteryManager Android.", 12f))
+        toolWorkspace("Battery Info", "Status baterai, suhu, tegangan, dan kondisi pengisian.", "battery-high")
+        toolWorkspaceSection("BATTERY", "Informasi dibaca dari BatteryManager Android.")
         val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         if (intent == null) { infoRow("Status", "Tidak tersedia"); return }
         val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
@@ -4502,8 +4770,8 @@ class MainActivity : Activity() {
 
     private fun fileSearchTool() {
         clearPage("File Search")
-        content.addView(label("Cari file", 22f, true))
-        content.addView(subLabel("Pencarian dibatasi ke folder data aplikasi agar aman dan cepat.", 12f))
+        toolWorkspace("File Search", "Cari file berdasarkan nama di ruang data aplikasi.", "file-search")
+        toolWorkspaceSection("SEARCH", "Pencarian dibatasi ke folder data aplikasi agar cepat.")
         val q = edit("contoh: config.json")
         content.addView(q)
         content.addView(button("Cari") {
@@ -6462,169 +6730,947 @@ class MainActivity : Activity() {
     }
 
     // ---------- GITHUB ZIP PUBLISHER ----------
+    // Tiga layar dalam satu halaman: Pengaturan -> Proses Upload -> Upload Selesai.
 
-    private fun githubZipTool() {
-        clearPage("GitHub Folder Publisher")
-        addToolHeader("GitHub Folder Publisher", "Pilih folder project. Semua file dan subfolder akan ditampilkan lalu di-upload langsung ke GitHub.", "github")
+    private data class GhProgress(val step: Int, val detail: String, val current: Int = 0, val total: Int = 0)
 
-        val user = edit("Username GitHub").apply { setText("username183728") }
-        val repo = edit("Nama repository").apply { setText("B1") }
-        val token = edit("GitHub Personal Access Token")
-        token.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        val branch = edit("Branch").apply { setText("main") }
-        val message = edit("Pesan commit").apply { setText("Upload folder via GITLS") }
+    private data class GhResult(
+        val owner: String, val repo: String, val branch: String,
+        val files: Int, val bytes: Long, val commitSha: String,
+        val url: String, val createdRepo: Boolean, val createdPrivate: Boolean
+    )
 
-        githubFolderLabel = label("Belum ada folder dipilih", 13f)
-        githubUploadStatus = label("Pilih folder project untuk melihat seluruh isi sebelum upload.", 11f)
-        githubUploadStatus?.setTextColor(textMuted)
+    private var ghStage: FrameLayout? = null
+    private var ghSource = 0
+    private var ghBranch = "main"
+    private var ghSaveToken = true
+    private var ghPrivateRepo = true
+    private var ghRunning = false
+    private var ghStartedAt = 0L
+    private var ghCurrentStep = 0
+    private var ghFileTotal = 0
+    private var ghRetry: (() -> Unit)? = null
+    private var ghLastResult: GhResult? = null
+    private var ghUserValue = ""
+    private var ghRepoValue = ""
+    private var ghTokenValue = ""
+    private var ghCommitValue = ""
+    private var ghRing: ProgressRingView? = null
+    private var ghPercentText: TextView? = null
+    private var ghElapsedText: TextView? = null
+    private var ghNoteBox: LinearLayout? = null
+    private var ghErrorHost: LinearLayout? = null
+    private val ghStepViews = ArrayList<StepStateView>()
+    private val ghStepTitles = ArrayList<TextView>()
+    private val ghStepDetails = ArrayList<TextView>()
+    private val ghHandler = Handler(Looper.getMainLooper())
+    private val ghTicker = object : Runnable {
+        override fun run() {
+            if (!ghRunning) return
+            val sec = ((SystemClock.elapsedRealtime() - ghStartedAt) / 1000L).toInt()
+            ghElapsedText?.text = "Berjalan %02d:%02d".format(sec / 60, sec % 60)
+            ghHandler.postDelayed(this, 1000L)
+        }
+    }
 
-        content.addView(user)
-        content.addView(repo)
-        content.addView(token)
-        content.addView(branch)
-        content.addView(message)
-        content.addView(button("Pilih Folder Project") {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            }, GITHUB_FOLDER_PICK_REQUEST)
-        })
-        content.addView(githubFolderLabel)
-        content.addView(githubUploadStatus)
-        content.addView(subLabel("Pilih folder utama project (contoh: Tools-main). Semua file di dalam folder dan subfolder akan ikut, kecuali folder .git dan file cache umum.", 11f))
-        content.addView(button("Lihat Isi Folder") {
-            if (githubFolderFiles.isEmpty()) toast("Pilih folder terlebih dahulu") else {
-                val list = githubFolderFiles.joinToString("\n") { it.first }
-                AlertDialog.Builder(this)
-                    .setTitle("Isi folder • ${githubFolderFiles.size} file")
-                    .setMessage(list.take(45000))
-                    .setPositiveButton("Tutup", null)
-                    .show()
-            }
-        })
-        content.addView(button("Upload Folder ke GitHub") {
-            val treeUri = githubFolderUri
-            val owner = user.text.toString().trim()
-            val repository = repo.text.toString().trim()
-            val pat = token.text.toString().trim()
-            val targetBranch = branch.text.toString().trim().ifBlank { "main" }
-            val commitMessage = message.text.toString().trim().ifBlank { "Upload folder via GITLS" }
-            if (treeUri == null || githubFolderFiles.isEmpty()) { toast("Pilih folder yang berisi file terlebih dahulu"); return@button }
-            if (!owner.matches(Regex("[A-Za-z0-9_.-]+"))) { toast("Username GitHub tidak valid"); return@button }
-            if (!repository.matches(Regex("[A-Za-z0-9_.-]+"))) { toast("Nama repository tidak valid"); return@button }
-            if (pat.isBlank()) { toast("Masukkan GitHub token"); return@button }
-            if (!targetBranch.matches(Regex("[A-Za-z0-9._/-]+"))) { toast("Nama branch tidak valid"); return@button }
-            val status = githubUploadStatus
-            status?.text = "Menyiapkan upload folder..."
-            thread {
-                val result = runCatching {
-                    uploadFolderToGitHub(treeUri, owner, repository, pat, targetBranch, commitMessage) { text ->
-                        runOnUiThread { status?.text = text }
-                    }
-                }
-                runOnUiThread {
-                    result.onSuccess { summary -> status?.text = summary; toast("Upload GitHub selesai") }
-                        .onFailure { e -> status?.text = "Upload gagal: ${e.message ?: "Unknown error"}"; toast("Upload GitHub gagal") }
-                }
-            }
+    // ----- warna & helper kecil (mengikuti tema terang/gelap aplikasi) -----
+    private fun ghc(dark: Long, light: Long): Int = (if (isDarkTheme) dark else light).toInt()
+    private val ghInk: Int get() = ghc(0xFFF4F4F6, 0xFF15161A)
+    private val ghOnInk: Int get() = ghc(0xFF15161A, 0xFFFFFFFF)
+    private val ghCard: Int get() = ghc(0xFF1B1D22, 0xFFFFFFFF)
+    private val ghStroke: Int get() = ghc(0xFF34373F, 0xFFE3E5EA)
+    private val ghMuted: Int get() = ghc(0xFF9DA0A9, 0xFF6C717C)
+    private val ghSoft: Int get() = ghc(0xFF23262C, 0xFFF0F1F4)
+    private val ghDanger: Int get() = 0xFFD9534F.toInt()
+
+    private fun ghRound(fill: Int, radiusDp: Int, stroke: Int? = null, strokeDp: Int = 1): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(fill)
+            cornerRadius = dp(radiusDp).toFloat()
+            if (stroke != null) setStroke(dp(strokeDp), stroke)
+        }
+
+    private fun ghText(text: String, sp: Float, color: Int = ghInk, bold: Boolean = false): TextView = TextView(this).apply {
+        this.text = text
+        textSize = sp
+        setTextColor(color)
+        includeFontPadding = false
+        if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+    }
+
+    private fun ghIcon(name: String, sp: Float, color: Int = ghInk): MdiIconView =
+        MdiIconView(this).apply { setIconName(name); setIconSize(sp); setTextColor(color) }
+
+    private fun ghLogo(sizeDp: Int, color: Int): PublishLogoView =
+        PublishLogoView(this).apply { this.color = color; layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp)) }
+
+    private fun ghFormatBytes(bytes: Long): String {
+        val kb = 1024.0
+        val mb = kb * 1024
+        val gb = mb * 1024
+        return when {
+            bytes >= gb -> "%.2f GB".format(Locale.US, bytes / gb)
+            bytes >= mb -> "%.1f MB".format(Locale.US, bytes / mb)
+            bytes >= kb -> "%.1f KB".format(Locale.US, bytes / kb)
+            else -> "$bytes B"
+        }
+    }
+
+    private fun ghHideKeyboard(v: View) {
+        runCatching {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                .hideSoftInputFromWindow(v.windowToken, 0)
+        }
+    }
+
+    private fun ghWatch(edit: EditText, onChange: () -> Unit) {
+        edit.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: android.text.Editable?) { onChange() }
         })
     }
 
-    private fun scanGithubFolder(treeUri: Uri) {
-        thread {
-            val result = runCatching {
-                val root = DocumentFile.fromTreeUri(this, treeUri) ?: error("Folder tidak dapat dibuka")
-                val found = mutableListOf<Pair<String, DocumentFile>>()
-                fun walk(dir: DocumentFile, prefix: String) {
-                    dir.listFiles().forEach { child ->
-                        val name = child.name ?: return@forEach
-                        if (name == ".git" || name == "__MACOSX" || name == "node_modules" || name == ".gradle" || name == "build" || name == ".DS_Store" || name == "Thumbs.db") return@forEach
-                        val rel = if (prefix.isBlank()) name else "$prefix/$name"
-                        if (child.isDirectory) walk(child, rel) else if (child.isFile) found.add(rel to child)
+    // ----- komponen form -----
+    private class GhField(val root: LinearLayout, val edit: EditText, val error: TextView, val row: LinearLayout)
+
+    private fun ghFieldBg(focused: Boolean, error: Boolean): GradientDrawable =
+        ghRound(ghCard, 16, if (error) ghDanger else if (focused) ghInk else ghStroke, if (focused || error) 2 else 1)
+
+    private fun ghField(labelText: String, iconName: String, hint: String, initial: String, password: Boolean = false): GhField {
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(ghText(labelText, 13f, ghInk, true), LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(7); leftMargin = dp(2) })
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), 0, dp(10), 0)
+            background = ghFieldBg(false, false)
+        }
+        row.addView(ghIcon(iconName, 20f, ghMuted), LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(10) })
+        val edit = EditText(this).apply {
+            this.hint = hint
+            setText(initial)
+            textSize = 15f
+            setTextColor(ghInk)
+            setHintTextColor(ghMuted)
+            background = null
+            setPadding(0, 0, 0, 0)
+            maxLines = 1
+            setSingleLine(true)
+            inputType = if (password) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+        row.addView(edit, LinearLayout.LayoutParams(0, dp(54), 1f))
+        if (password) {
+            val eye = ghIcon("eye-outline", 20f, ghMuted).apply {
+                isClickable = true
+                setOnClickListener {
+                    val visible = edit.transformationMethod == null
+                    val cursor = edit.selectionStart
+                    if (visible) {
+                        edit.transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
+                        setIconName("eye-outline")
+                    } else {
+                        edit.transformationMethod = null
+                        setIconName("eye-off-outline")
                     }
+                    edit.setSelection(cursor.coerceAtLeast(0).coerceAtMost(edit.text.length))
                 }
-                walk(root, "")
-                require(found.isNotEmpty()) { "Folder kosong atau tidak memiliki file yang dapat dibaca" }
-                require(found.size <= 3000) { "Maksimal 3000 file per upload" }
-                found.sortedBy { it.first }
             }
-            runOnUiThread {
-                result.onSuccess { files ->
-                    githubFolderFiles = files
-                    githubUploadStatus?.text = "Siap: ${files.size} file ditemukan. Tekan Upload Folder ke GitHub."
-                }.onFailure { e ->
-                    githubFolderFiles = emptyList()
-                    githubUploadStatus?.text = "Gagal membaca folder: ${e.message}"
+            row.addView(eye, LinearLayout.LayoutParams(dp(40), dp(40)))
+        }
+        root.addView(row, LinearLayout.LayoutParams(-1, -2))
+        val error = ghText("", 12f, ghDanger).apply { visibility = View.GONE; setPadding(dp(4), dp(6), 0, 0) }
+        root.addView(error, LinearLayout.LayoutParams(-1, -2))
+        root.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) }
+        val field = GhField(root, edit, error, row)
+        edit.setOnFocusChangeListener { _, hasFocus -> row.background = ghFieldBg(hasFocus, error.visibility == View.VISIBLE) }
+        ghWatch(edit) { ghClearError(field) }
+        return field
+    }
+
+    private fun ghSetError(field: GhField, message: String) {
+        field.error.text = message
+        field.error.visibility = View.VISIBLE
+        field.row.background = ghFieldBg(field.edit.hasFocus(), true)
+        field.row.animate().cancel()
+        field.row.translationX = 0f
+        field.row.animate().translationX(dp(6).toFloat()).setDuration(50).withEndAction {
+            field.row.animate().translationX(-dp(4).toFloat()).setDuration(60).withEndAction {
+                field.row.animate().translationX(0f).setDuration(50).start()
+            }.start()
+        }.start()
+    }
+
+    private fun ghClearError(field: GhField) {
+        if (field.error.visibility == View.VISIBLE) {
+            field.error.visibility = View.GONE
+            field.row.background = ghFieldBg(field.edit.hasFocus(), false)
+        }
+    }
+
+    private fun ghPressable(view: View, onClick: () -> Unit) {
+        view.isClickable = true
+        view.isFocusable = true
+        view.setOnClickListener {
+            view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            view.animate().scaleX(0.98f).scaleY(0.98f).setDuration(60).withEndAction {
+                view.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
+            }.start()
+            onClick()
+        }
+    }
+
+    private fun ghPrimaryButton(text: String, onClick: () -> Unit): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        background = ghRound(ghInk, 18)
+        addView(ghLogo(22, ghOnInk), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(12) })
+        addView(ghText(text, 15f, ghOnInk, true))
+        addView(ghIcon("arrow-right", 18f, ghOnInk), LinearLayout.LayoutParams(dp(22), dp(22)).apply { leftMargin = dp(10) })
+        layoutParams = LinearLayout.LayoutParams(-1, dp(56)).apply { topMargin = dp(6); bottomMargin = dp(10) }
+        ghPressable(this, onClick)
+    }
+
+    private fun ghOutlineButton(text: String, iconName: String, onClick: () -> Unit): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        background = ghRound(ghCard, 18, ghStroke)
+        addView(ghIcon(iconName, 19f, ghInk), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(10) })
+        addView(ghText(text, 15f, ghInk, true))
+        layoutParams = LinearLayout.LayoutParams(-1, dp(54)).apply { bottomMargin = dp(10) }
+        ghPressable(this, onClick)
+    }
+
+    private fun ghSmallButton(text: String, iconName: String, onClick: () -> Unit): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        background = ghRound(ghSoft, 12)
+        setPadding(dp(12), 0, dp(12), 0)
+        addView(ghIcon(iconName, 17f, ghInk), LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(6) })
+        addView(ghText(text, 13f, ghInk, true))
+        ghPressable(this, onClick)
+    }
+
+    private fun ghSwitchRow(iconName: String, text: String, checked: Boolean, onChange: (Boolean) -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(2), 0, dp(2))
+        }
+        row.addView(ghIcon(iconName, 18f, ghMuted), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(10) })
+        row.addView(ghText(text, 13.5f, ghMuted), LinearLayout.LayoutParams(0, -2, 1f))
+        val sw = Switch(this).apply {
+            isChecked = checked
+            val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+            trackTintList = android.content.res.ColorStateList(states, intArrayOf(ghInk, ghStroke))
+            thumbTintList = android.content.res.ColorStateList(states, intArrayOf(ghOnInk, ghCard))
+            setOnCheckedChangeListener { v, value -> v.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK); onChange(value) }
+        }
+        row.addView(sw, LinearLayout.LayoutParams(-2, dp(40)))
+        return row
+    }
+
+    private fun ghSectionTitle(text: String): TextView =
+        ghText(text, 12.5f, ghMuted, true).apply { setPadding(dp(2), dp(6), 0, dp(10)) }
+
+    // ----- pergantian layar -----
+    private fun ghShow(screen: View, titleText: String) {
+        val stage = ghStage ?: return
+        title.text = titleText
+        stage.removeAllViews()
+        stage.addView(screen, FrameLayout.LayoutParams(-1, -2))
+        screen.alpha = 0f
+        screen.translationY = dp(14).toFloat()
+        screen.animate().alpha(1f).translationY(0f).setDuration(260).start()
+        scroll.post { scroll.smoothScrollTo(0, 0) }
+    }
+
+    // =====================================================================
+    // Layar 1: Pengaturan GitHub
+    // =====================================================================
+    private fun githubZipTool() {
+        clearPage("GitHub Publisher")
+        ghUserValue = prefs.getString("gh_user", null) ?: "username183728"
+        ghRepoValue = prefs.getString("gh_repo", null) ?: "B1"
+        ghBranch = prefs.getString("gh_branch", null) ?: "main"
+        ghSaveToken = prefs.getBoolean("gh_save_token", true)
+        ghPrivateRepo = prefs.getBoolean("gh_private", true)
+        ghTokenValue = if (ghSaveToken) prefs.getString("gh_token_enc", null)?.let { GithubTokenVault.decrypt(it) }.orEmpty() else ""
+        ghCommitValue = prefs.getString("gh_commit", null) ?: "Upload project via GITLS"
+        ghStage = FrameLayout(this)
+        content.addView(ghStage, LinearLayout.LayoutParams(-1, -2))
+        ghShow(ghSettingsScreen(), "Pengaturan GitHub")
+    }
+
+    private fun ghSettingsScreen(): LinearLayout {
+        val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(2), dp(4), dp(2), dp(24)) }
+
+        // kepala: logo + penjelasan singkat
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = ghRound(ghSoft, 20)
+        }
+        head.addView(ghLogo(38, ghInk), LinearLayout.LayoutParams(dp(38), dp(38)).apply { rightMargin = dp(14) })
+        val headTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        headTexts.addView(ghText("GITLS Publisher", 16f, ghInk, true))
+        headTexts.addView(ghText("Kirim ZIP atau folder project ke repository GitHub tanpa perintah Git.", 12f, ghMuted).apply { setPadding(0, dp(4), 0, 0) })
+        head.addView(headTexts, LinearLayout.LayoutParams(0, -2, 1f))
+        screen.addView(head, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+
+        val user = ghField("Username", "account-outline", "username GitHub", ghUserValue)
+        val repo = ghField("Repository", "source-repository", "nama repository", ghRepoValue)
+        screen.addView(user.root)
+        screen.addView(repo.root)
+
+        // branch (dropdown)
+        screen.addView(ghText("Branch", 13f, ghInk, true), LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(7); leftMargin = dp(2) })
+        val branchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            background = ghFieldBg(false, false)
+        }
+        branchRow.addView(ghIcon("source-branch", 20f, ghMuted), LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(10) })
+        val branchText = ghText(ghBranch, 15f, ghInk)
+        branchRow.addView(branchText, LinearLayout.LayoutParams(0, -2, 1f))
+        branchRow.addView(ghIcon("chevron-down", 20f, ghMuted), LinearLayout.LayoutParams(dp(24), dp(24)))
+        ghPressable(branchRow) {
+            ghHideKeyboard(branchRow)
+            val options = listOf("main", "master", "develop", "Lainnya…")
+            AlertDialog.Builder(this)
+                .setTitle("Pilih branch")
+                .setItems(options.toTypedArray()) { _, which ->
+                    if (which < options.size - 1) {
+                        ghBranch = options[which]
+                        branchText.text = ghBranch
+                    } else {
+                        val input = EditText(this).apply { setText(ghBranch); setSingleLine(true); setPadding(dp(20), dp(14), dp(20), dp(14)) }
+                        AlertDialog.Builder(this)
+                            .setTitle("Nama branch")
+                            .setView(input)
+                            .setNegativeButton("Batal", null)
+                            .setPositiveButton("Pakai") { _, _ ->
+                                val value = input.text.toString().trim()
+                                if (value.matches(Regex("[A-Za-z0-9._/-]+"))) { ghBranch = value; branchText.text = value }
+                                else toast("Nama branch tidak valid")
+                            }.show()
+                    }
+                }.show()
+        }
+        screen.addView(branchRow, LinearLayout.LayoutParams(-1, dp(56)).apply { bottomMargin = dp(16) })
+
+        val token = ghField("Token (Personal Access Token)", "key-variant", "ghp_••••••••••••", ghTokenValue, password = true)
+        token.root.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) }
+        screen.addView(token.root)
+        screen.addView(ghSwitchRow("information-outline", "Simpan token (terenkripsi)", ghSaveToken) { ghSaveToken = it })
+        screen.addView(ghSwitchRow("lock-outline", "Repository baru dibuat private", ghPrivateRepo) { ghPrivateRepo = it })
+
+        val commit = ghField("Pesan commit", "text-box-outline", "Upload project via GITLS", ghCommitValue)
+        commit.root.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14); bottomMargin = dp(8) }
+        screen.addView(commit.root)
+
+        // sumber project
+        screen.addView(ghSectionTitle("Sumber project"))
+        screen.addView(ghSourcePicker())
+
+        // status
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(10), dp(4), dp(14))
+        }
+        statusRow.addView(ghIcon("information-outline", 16f, ghMuted), LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
+        val statusText = ghText("Pilih ZIP atau folder untuk memulai.", 12f, ghMuted)
+        githubUploadStatus = statusText
+        statusRow.addView(statusText, LinearLayout.LayoutParams(0, -2, 1f))
+        screen.addView(statusRow)
+
+        screen.addView(ghPrimaryButton("Simpan & Upload") {
+            ghHideKeyboard(screen)
+            val owner = user.edit.text.toString().trim()
+            val repository = repo.edit.text.toString().trim()
+            val pat = token.edit.text.toString().trim()
+            val message = commit.edit.text.toString().trim()
+            var valid = true
+            if (!owner.matches(Regex("[A-Za-z0-9_.-]+"))) { ghSetError(user, "Username hanya boleh huruf, angka, titik, garis"); valid = false }
+            if (!repository.matches(Regex("[A-Za-z0-9_.-]+"))) { ghSetError(repo, "Nama repository tidak valid"); valid = false }
+            if (pat.isBlank()) { ghSetError(token, "Token wajib diisi"); valid = false }
+            if (!valid) return@ghPrimaryButton
+            if (!validateGithubInputs(owner, repository, pat, ghBranch)) return@ghPrimaryButton
+            val commitMessage = message.ifBlank { "Upload project via GITLS" }
+            val zipUri = githubZipUri
+            val folderUri = githubFolderUri
+            if (ghSource == 0 && zipUri == null) { toast("Pilih file ZIP terlebih dahulu"); return@ghPrimaryButton }
+            if (ghSource == 0 && githubZipPreviewFiles.isEmpty()) { toast("Tunggu analisis ZIP selesai atau pilih ZIP lagi"); return@ghPrimaryButton }
+            if (ghSource == 1 && folderUri == null) { toast("Pilih folder project terlebih dahulu"); return@ghPrimaryButton }
+
+            ghUserValue = owner; ghRepoValue = repository; ghTokenValue = pat; ghCommitValue = commitMessage
+            ghSaveSettings(owner, repository, pat, commitMessage)
+
+            val branch = ghBranch
+            val makePrivate = ghPrivateRepo
+            if (ghSource == 0 && zipUri != null) {
+                val root = githubZipRoot
+                val excluded = githubZipExcluded.toSet()
+                ghStartUpload("ZIP", owner, repository, branch) { p -> uploadZipToGitHub(zipUri, owner, repository, pat, branch, commitMessage, root, excluded, makePrivate, p) }
+            } else if (folderUri != null) {
+                ghStartUpload("Folder", owner, repository, branch) { p -> uploadFolderToGitHub(folderUri, owner, repository, pat, branch, commitMessage, makePrivate, p) }
+            }
+        })
+
+        screen.addView(
+            ghText("Token dipakai langsung untuk request ke GitHub. Bila \"Simpan token\" mati, token tidak disimpan sama sekali. Butuh izin Contents read/write (classic: scope repo).", 11f, ghMuted)
+                .apply { setPadding(dp(4), dp(4), dp(4), 0); setLineSpacing(0f, 1.15f) }
+        )
+        return screen
+    }
+
+    private fun ghSaveSettings(owner: String, repository: String, pat: String, commitMessage: String) {
+        val editor = prefs.edit()
+            .putString("gh_user", owner).putString("gh_repo", repository).putString("gh_branch", ghBranch)
+            .putString("gh_commit", commitMessage)
+            .putBoolean("gh_save_token", ghSaveToken).putBoolean("gh_private", ghPrivateRepo)
+        if (ghSaveToken) {
+            val enc = GithubTokenVault.encrypt(pat)
+            if (enc != null) editor.putString("gh_token_enc", enc) else editor.remove("gh_token_enc")
+        } else {
+            editor.remove("gh_token_enc")
+        }
+        editor.apply()
+    }
+
+    // ----- pemilih sumber: ZIP / Folder -----
+    private fun ghSourcePicker(): LinearLayout {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = ghRound(ghSoft, 16)
+        }
+        val zipPanel = ghZipPanel()
+        val folderPanel = ghFolderPanel()
+        val tabViews = ArrayList<LinearLayout>()
+        fun paintTabs() {
+            tabViews.forEachIndexed { index, tab ->
+                val selected = index == ghSource
+                tab.background = if (selected) ghRound(ghCard, 12, ghStroke) else null
+                for (i in 0 until tab.childCount) {
+                    val child = tab.getChildAt(i)
+                    if (child is MdiIconView) child.setTextColor(if (selected) ghInk else ghMuted)
+                    if (child is TextView && child !is MdiIconView) child.setTextColor(if (selected) ghInk else ghMuted)
+                }
+            }
+            zipPanel.visibility = if (ghSource == 0) View.VISIBLE else View.GONE
+            folderPanel.visibility = if (ghSource == 1) View.VISIBLE else View.GONE
+        }
+        fun tab(label: String, iconName: String, index: Int): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(ghIcon(iconName, 18f, ghMuted), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(8) })
+            addView(ghText(label, 14f, ghMuted, true))
+            isClickable = true
+            setOnClickListener {
+                if (ghSource != index) {
+                    it.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                    ghSource = index
+                    paintTabs()
+                    val panel = if (index == 0) zipPanel else folderPanel
+                    panel.alpha = 0f
+                    panel.animate().alpha(1f).setDuration(200).start()
                 }
             }
         }
+        tabViews.add(tab("File ZIP", "folder-zip-outline", 0))
+        tabViews.add(tab("Folder", "folder-open-outline", 1))
+        tabViews.forEach { tabs.addView(it, LinearLayout.LayoutParams(0, dp(42), 1f)) }
+        box.addView(tabs, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        box.addView(zipPanel)
+        box.addView(folderPanel)
+        paintTabs()
+        return box
+    }
+
+    private fun ghSourceCard(iconName: String, titleView: TextView, hintText: String): LinearLayout {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            background = ghRound(ghCard, 18, ghStroke)
+        }
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val badge = ghIcon(iconName, 22f, ghInk).apply { background = ghRound(ghSoft, 14) }
+        top.addView(badge, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(14) })
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(titleView.apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+        texts.addView(ghText(hintText, 12f, ghMuted).apply { setPadding(0, dp(4), 0, 0) })
+        top.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
+        card.addView(top)
+        return card
+    }
+
+    private fun ghZipPanel(): LinearLayout {
+        val zipTitle = ghText("Belum ada ZIP dipilih", 14.5f, ghInk, true)
+        githubZipLabel = zipTitle
+        val card = ghSourceCard("folder-zip-outline", zipTitle, "Preview isi, atur root, dan kecualikan file.")
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(14), 0, 0) }
+        actions.addView(ghSmallButton("Pilih ZIP", "folder-open-outline") {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "application/zip"; addCategory(Intent.CATEGORY_OPENABLE) }, GITHUB_ZIP_PICK_REQUEST)
+        }, LinearLayout.LayoutParams(0, dp(40), 1f).apply { rightMargin = dp(8) })
+        actions.addView(ghSmallButton("Kelola isi", "file-tree-outline") {
+            val uri = githubZipUri
+            if (uri == null) toast("Pilih ZIP terlebih dahulu") else showGithubZipPreview(uri)
+        }, LinearLayout.LayoutParams(0, dp(40), 1f))
+        card.addView(actions)
+        return LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(card) }
+    }
+
+    private fun ghFolderPanel(): LinearLayout {
+        val folderTitle = ghText("Belum ada folder dipilih", 14.5f, ghInk, true)
+        githubFolderLabel = folderTitle
+        val card = ghSourceCard("folder-outline", folderTitle, "Semua file dan subfolder ikut terkirim.")
+        val previewText = ghText("Isi folder akan tampil di sini.", 11.5f, ghMuted).apply {
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = ghRound(ghSoft, 12)
+            setLineSpacing(0f, 1.2f)
+            maxLines = 9
+        }
+        githubFolderPreview = previewText
+        card.addView(previewText, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(12), 0, 0) }
+        actions.addView(ghSmallButton("Pilih folder", "folder-open-outline") {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply { addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) }, GITHUB_FOLDER_PICK_REQUEST)
+        }, LinearLayout.LayoutParams(-1, dp(40)))
+        card.addView(actions)
+        return LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(card) }
+    }
+
+    private fun validateGithubInputs(owner: String, repository: String, pat: String, branch: String): Boolean {
+        if (!owner.matches(Regex("[A-Za-z0-9_.-]+"))) { toast("Username GitHub tidak valid"); return false }
+        if (!repository.matches(Regex("[A-Za-z0-9_.-]+"))) { toast("Nama repository tidak valid"); return false }
+        if (pat.isBlank()) { toast("Masukkan GitHub token"); return false }
+        if (!branch.matches(Regex("[A-Za-z0-9._/-]+"))) { toast("Nama branch tidak valid"); return false }
+        return true
+    }
+
+    // =====================================================================
+    // Layar 2: Proses Upload (animasi)
+    // =====================================================================
+    private fun ghStepTitle(index: Int, branch: String): String = when (index) {
+        0 -> "Menghubungkan ke GitHub"
+        1 -> "Membuat repository (jika belum ada)"
+        2 -> "Mengunggah file"
+        3 -> "Push ke branch $branch"
+        else -> "Verifikasi hasil upload"
+    }
+
+    private fun ghProgressScreen(kind: String, owner: String, repo: String, branch: String): LinearLayout {
+        ghStepViews.clear(); ghStepTitles.clear(); ghStepDetails.clear()
+        val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(2), dp(8), dp(2), dp(24)) }
+
+        val ringBox = FrameLayout(this)
+        val ring = ProgressRingView(this).apply {
+            ringColor = ghInk
+            trackColor = ghSoft
+            indeterminate = true
+        }
+        ghRing = ring
+        ringBox.addView(ring, FrameLayout.LayoutParams(-1, -1))
+        val center = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
+        center.addView(ghLogo(54, ghInk), LinearLayout.LayoutParams(dp(54), dp(54)).apply { bottomMargin = dp(8) })
+        ghPercentText = ghText("0%", 28f, ghInk, true)
+        center.addView(ghPercentText)
+        ringBox.addView(center, FrameLayout.LayoutParams(-1, -1))
+        screen.addView(ringBox, LinearLayout.LayoutParams(dp(210), dp(210)).apply { topMargin = dp(6); bottomMargin = dp(14) })
+
+        val target = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = ghRound(ghSoft, 14)
+        }
+        target.addView(ghIcon("source-repository", 15f, ghMuted), LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(6) })
+        target.addView(ghText("$owner/$repo", 12.5f, ghInk, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+        target.addView(ghIcon("source-branch", 15f, ghMuted), LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(12); rightMargin = dp(4) })
+        target.addView(ghText(branch, 12.5f, ghMuted))
+        screen.addView(target, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(22) })
+
+        val steps = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), 0, dp(6), 0) }
+        for (i in 0..4) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(9), 0, dp(9)) }
+            val state = StepStateView(this).apply {
+                inkColor = ghInk; onInkColor = ghOnInk; mutedColor = ghStroke; dangerColor = ghDanger
+                setState(StepStateView.PENDING, false)
+            }
+            ghStepViews.add(state)
+            row.addView(state, LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(14); topMargin = dp(1) })
+            val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val stepTitle = ghText(ghStepTitle(i, branch), 14.5f, ghMuted)
+            val stepDetail = ghText("", 11.5f, ghMuted).apply { visibility = View.GONE; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE; setPadding(0, dp(4), 0, 0) }
+            ghStepTitles.add(stepTitle); ghStepDetails.add(stepDetail)
+            col.addView(stepTitle); col.addView(stepDetail)
+            row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+            steps.addView(row)
+        }
+        screen.addView(steps, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
+
+        val note = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = ghRound(ghSoft, 16)
+        }
+        val spinner = StepStateView(this).apply {
+            inkColor = ghInk; onInkColor = ghOnInk; mutedColor = ghStroke; dangerColor = ghDanger
+            setState(StepStateView.ACTIVE, false)
+        }
+        note.addView(spinner, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(12) })
+        val noteTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        noteTexts.addView(ghText("Mohon tunggu, proses ini mungkin memakan waktu…", 12.5f, ghMuted).apply { setLineSpacing(0f, 1.1f) })
+        ghElapsedText = ghText("Berjalan 00:00", 11.5f, ghMuted).apply { setPadding(0, dp(4), 0, 0) }
+        noteTexts.addView(ghElapsedText)
+        note.addView(noteTexts, LinearLayout.LayoutParams(0, -2, 1f))
+        ghNoteBox = note
+        screen.addView(note, LinearLayout.LayoutParams(-1, -2))
+
+        ghErrorHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        screen.addView(ghErrorHost, LinearLayout.LayoutParams(-1, -2))
+        return screen
+    }
+
+    private fun ghStartUpload(kind: String, owner: String, repo: String, branch: String, task: ((GhProgress) -> Unit) -> GhResult) {
+        if (ghRunning) { toast("Upload sedang berjalan"); return }
+        ghRetry = { ghStartUpload(kind, owner, repo, branch, task) }
+        ghShow(ghProgressScreen(kind, owner, repo, branch), "Proses Upload")
+        ghRunning = true
+        ghCurrentStep = 0
+        ghFileTotal = 0
+        ghStartedAt = SystemClock.elapsedRealtime()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        ghHandler.removeCallbacks(ghTicker)
+        ghHandler.postDelayed(ghTicker, 1000L)
+        ghOnProgress(GhProgress(0, "Menyiapkan $kind…"))
+        thread {
+            val result = runCatching { task { p -> runOnUiThread { ghOnProgress(p) } } }
+            runOnUiThread {
+                ghRunning = false
+                ghHandler.removeCallbacks(ghTicker)
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                result.onSuccess { ghShowResult(it) }.onFailure { ghShowFailure(it) }
+            }
+        }
+    }
+
+    private fun ghOnProgress(p: GhProgress) {
+        if (ghStage?.isAttachedToWindow != true || ghStepViews.size < 5) return
+        if (p.step < ghCurrentStep) return
+        ghCurrentStep = p.step
+        for (i in 0..4) {
+            val state = when {
+                i < p.step -> StepStateView.DONE
+                i == p.step -> StepStateView.ACTIVE
+                else -> StepStateView.PENDING
+            }
+            ghStepViews[i].setState(state)
+            ghStepTitles[i].setTextColor(if (i <= p.step) ghInk else ghMuted)
+            if (i == p.step) ghStepTitles[i].setTypeface(null, android.graphics.Typeface.BOLD)
+            else ghStepTitles[i].setTypeface(null, android.graphics.Typeface.NORMAL)
+        }
+        if (p.step == 2 && p.total > 0) {
+            ghFileTotal = p.total
+            ghStepTitles[2].text = "Mengunggah file (${p.current}/${p.total})"
+        }
+        if (p.step > 2 && ghFileTotal > 0) {
+            ghStepTitles[2].text = "Mengunggah file ($ghFileTotal/$ghFileTotal)"
+            ghStepDetails[2].text = "$ghFileTotal file terunggah"
+            ghStepDetails[2].visibility = View.VISIBLE
+        }
+        if (p.detail.isNotBlank() && !(p.step == 2 && p.total == 0)) {
+            ghStepDetails[p.step].text = p.detail
+            ghStepDetails[p.step].visibility = View.VISIBLE
+        }
+        val pct = when (p.step) {
+            0 -> 4
+            1 -> 12
+            2 -> if (p.total > 0) 15 + (70 * (p.current - 1).coerceAtLeast(0)) / p.total else 15
+            3 -> 88
+            else -> 96
+        }
+        ghRing?.let { it.indeterminate = false; it.setProgress(pct.toFloat()) }
+        ghPercentText?.text = "$pct%"
+    }
+
+    private fun ghShowFailure(error: Throwable) {
+        if (ghStage?.isAttachedToWindow != true) return
+        val failedStep = ghCurrentStep.coerceIn(0, 4)
+        if (ghStepViews.size == 5) {
+            ghStepViews[failedStep].setState(StepStateView.FAILED)
+            ghStepTitles[failedStep].setTextColor(ghDanger)
+        }
+        ghRing?.let { it.indeterminate = false; it.ringColor = ghDanger }
+        ghNoteBox?.visibility = View.GONE
+        val host = ghErrorHost ?: return
+        host.removeAllViews()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = ghRound(ghCard, 16, ghDanger)
+        }
+        card.addView(ghText("Upload gagal", 15f, ghDanger, true))
+        card.addView(ghText(ghFriendlyError(error), 12.5f, ghMuted).apply { setPadding(0, dp(6), 0, 0); setLineSpacing(0f, 1.15f) })
+        host.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        host.addView(ghPrimaryButton("Coba lagi") { ghRetry?.invoke() })
+        host.addView(ghOutlineButton("Ubah pengaturan", "cog-outline") { ghShow(ghSettingsScreen(), "Pengaturan GitHub") })
+        host.alpha = 0f
+        host.animate().alpha(1f).setDuration(240).start()
+        toast("Upload GitHub gagal")
+    }
+
+    private fun ghFriendlyError(error: Throwable): String {
+        val raw = error.message ?: error.javaClass.simpleName
+        return when {
+            raw.contains("HTTP 401") -> "Token ditolak GitHub. Periksa token atau masa berlakunya. ($raw)"
+            raw.contains("HTTP 403") -> "Akses ditolak. Pastikan token punya izin Contents read/write untuk repository ini. ($raw)"
+            raw.contains("HTTP 404") -> "Repository atau branch tidak ditemukan, atau token tidak punya akses. ($raw)"
+            raw.contains("HTTP 422") -> "GitHub menolak data yang dikirim. ($raw)"
+            error is java.net.UnknownHostException || error is java.net.SocketTimeoutException -> "Tidak bisa menjangkau GitHub. Periksa koneksi internet lalu coba lagi."
+            else -> raw
+        }
+    }
+
+    // =====================================================================
+    // Layar 3: Upload Selesai
+    // =====================================================================
+    private fun ghShowResult(result: GhResult) {
+        if (ghStage?.isAttachedToWindow != true) return
+        ghLastResult = result
+        val elapsed = ((SystemClock.elapsedRealtime() - ghStartedAt) / 1000L).toInt()
+        val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(2), dp(14), dp(2), dp(24)) }
+
+        val badge = SuccessBadgeView(this).apply { inkColor = ghInk; onInkColor = ghOnInk }
+        screen.addView(badge, LinearLayout.LayoutParams(dp(92), dp(92)).apply { bottomMargin = dp(18) })
+        screen.addView(ghText("Upload Berhasil!", 24f, ghInk, true))
+        val subtitle = if (result.createdRepo) "Repository baru dibuat (${if (result.createdPrivate) "private" else "public"}) dan project berhasil diunggah."
+        else "Project berhasil diunggah ke GitHub"
+        screen.addView(ghText(subtitle, 13f, ghMuted).apply { gravity = Gravity.CENTER; setPadding(dp(20), dp(8), dp(20), 0); setLineSpacing(0f, 1.15f) })
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(6), dp(16), dp(6))
+            background = ghRound(ghCard, 20, ghStroke)
+        }
+        fun infoRow(iconName: String, labelText: String, valueText: String, trailing: String? = null, onClick: (() -> Unit)? = null, last: Boolean = false) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(13), 0, dp(13))
+            }
+            row.addView(ghIcon(iconName, 22f, ghInk), LinearLayout.LayoutParams(dp(30), dp(30)).apply { rightMargin = dp(14) })
+            val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            col.addView(ghText(labelText, 11.5f, ghMuted))
+            col.addView(ghText(valueText, 15f, ghInk, true).apply { setPadding(0, dp(3), 0, 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+            row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+            if (trailing != null) row.addView(ghIcon(trailing, 19f, ghMuted), LinearLayout.LayoutParams(dp(26), dp(26)))
+            if (onClick != null) ghPressable(row, onClick)
+            card.addView(row)
+            if (!last) card.addView(View(this).apply { setBackgroundColor(ghStroke) }, LinearLayout.LayoutParams(-1, dp(1)).apply { leftMargin = dp(44) })
+        }
+        infoRow("source-repository", "Repository", "${result.owner}/${result.repo}", "open-in-new", { ghOpenUrl(result.url) })
+        infoRow("source-branch", "Branch", result.branch)
+        infoRow("file-tree-outline", "Total File", "${result.files} file")
+        infoRow("harddisk", "Ukuran", ghFormatBytes(result.bytes))
+        infoRow("source-commit", "Commit", result.commitSha.take(7), "content-copy", {
+            ghCopy("Commit SHA", result.commitSha); toast("SHA commit disalin")
+        })
+        infoRow("timer-outline", "Durasi", if (elapsed >= 60) "${elapsed / 60} mnt ${elapsed % 60} dtk" else "$elapsed dtk", last = true)
+        screen.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(24); bottomMargin = dp(18) })
+
+        screen.addView(ghPrimaryButton("Lihat di GitHub") { ghOpenUrl(result.url + "/tree/" + result.branch) })
+        screen.addView(ghOutlineButton("Upload Lagi", "upload-network") { ghShow(ghSettingsScreen(), "Pengaturan GitHub") })
+        screen.addView(ghOutlineButton("Salin tautan repository", "link-variant") { ghCopy("Repository", result.url); toast("Tautan disalin") })
+
+        ghShow(screen, "Upload Selesai")
+        badge.postDelayed({ badge.play() }, 120L)
+        screen.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        toast("Upload GitHub selesai")
+    }
+
+    private fun ghOpenUrl(url: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { toast("Tidak ada aplikasi untuk membuka tautan") }
+    }
+
+    private fun ghCopy(labelText: String, value: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(labelText, value))
+    }
+
+    // =====================================================================
+    // Mesin upload: satu jalur untuk ZIP dan folder
+    // =====================================================================
+    private fun ghHeaders(token: String) = mapOf(
+        "Authorization" to "Bearer $token",
+        "Accept" to "application/vnd.github+json",
+        "X-GitHub-Api-Version" to "2022-11-28",
+        "User-Agent" to "GITLS-Android"
+    )
+
+    /** Request dengan percobaan ulang untuk gangguan jaringan (bukan untuk error 4xx). */
+    private fun githubRequestRetry(method: String, url: String, body: JSONObject?, headers: Map<String, String>, attempts: Int = 3): JSONObject {
+        var last: IOException? = null
+        for (i in 1..attempts) {
+            try {
+                return githubRequest(method, url, body, headers)
+            } catch (e: IOException) {
+                val message = e.message.orEmpty()
+                if (message.startsWith("GitHub HTTP 4")) throw e
+                last = e
+                if (i < attempts) Thread.sleep(700L * i)
+            }
+        }
+        throw last ?: IOException("Request gagal")
+    }
+
+    private fun pushFilesToGitHub(
+        files: List<Pair<String, File>>, owner: String, repo: String, token: String, branch: String,
+        commitMessage: String, createPrivate: Boolean, progress: (GhProgress) -> Unit
+    ): GhResult {
+        require(files.isNotEmpty()) { "Tidak ada file yang dapat di-upload" }
+        require(files.size <= 3000) { "Maksimal 3000 file per upload" }
+        val base = "https://api.github.com/repos/${Uri.encode(owner)}/${Uri.encode(repo)}"
+        val headers = ghHeaders(token)
+
+        // 1. hubungkan & periksa token
+        progress(GhProgress(0, "Memeriksa token…"))
+        val me = try {
+            githubRequestRetry("GET", "https://api.github.com/user", null, headers)
+        } catch (e: IOException) {
+            if (e.message.orEmpty().contains("HTTP 401")) throw e else JSONObject()
+        }
+        val login = me.optString("login")
+        progress(GhProgress(0, if (login.isNotBlank()) "Terhubung sebagai $login" else "Terhubung"))
+
+        // 2. repository
+        progress(GhProgress(1, "Memeriksa $owner/$repo…"))
+        val repoInfo: JSONObject? = try {
+            githubRequestRetry("GET", base, null, headers)
+        } catch (e: IOException) {
+            if (e.message.orEmpty().contains("HTTP 404")) null else throw e
+        }
+        var created = false
+        var htmlUrl = repoInfo?.optString("html_url").orEmpty()
+        if (repoInfo == null) {
+            require(login.equals(owner, ignoreCase = true)) {
+                "Repository $owner/$repo belum ada, dan token milik ${login.ifBlank { "akun lain" }} sehingga tidak bisa membuatnya otomatis."
+            }
+            progress(GhProgress(1, "Membuat repository ${if (createPrivate) "private" else "public"}…"))
+            val made = githubRequestRetry("POST", "https://api.github.com/user/repos",
+                JSONObject().put("name", repo).put("private", createPrivate).put("auto_init", true)
+                    .put("description", "Dibuat lewat GITLS Publisher"), headers)
+            created = true
+            htmlUrl = made.optString("html_url")
+            Thread.sleep(800L)
+        } else {
+            val empty = try {
+                githubRequest("GET", "$base/git/trees/HEAD", null, headers); false
+            } catch (e: IOException) {
+                e.message.orEmpty().contains("HTTP 409")
+            }
+            if (empty) {
+                progress(GhProgress(1, "Repository masih kosong, membuat commit awal…"))
+                val readme = android.util.Base64.encodeToString("# $repo\n".toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP)
+                githubRequestRetry("PUT", "$base/contents/README.md", JSONObject().put("message", "Initial commit").put("content", readme), headers)
+            } else {
+                progress(GhProgress(1, "Repository ditemukan"))
+            }
+        }
+        if (htmlUrl.isBlank()) htmlUrl = "https://github.com/$owner/$repo"
+
+        val ref = runCatching { githubRequest("GET", "$base/git/ref/heads/${encodePath(branch)}", null, headers) }.getOrNull()
+        val parentSha = ref?.optJSONObject("object")?.optString("sha").orEmpty()
+        var baseTree = ""
+        if (parentSha.isNotBlank()) {
+            val parent = githubRequestRetry("GET", "$base/git/commits/$parentSha", null, headers)
+            baseTree = parent.optJSONObject("tree")?.optString("sha").orEmpty()
+        }
+
+        // 3. unggah file
+        val entries = JSONArray()
+        var totalBytes = 0L
+        files.forEachIndexed { index, (rel, file) ->
+            val size = file.length()
+            require(size <= 90L * 1024L * 1024L) { "File terlalu besar untuk upload API: $rel" }
+            progress(GhProgress(2, rel, index + 1, files.size))
+            val blobBody = JSONObject()
+                .put("content", android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP))
+                .put("encoding", "base64")
+            val blob = githubRequestRetry("POST", "$base/git/blobs", blobBody, headers)
+            val sha = blob.optString("sha")
+            require(sha.isNotBlank()) { "Gagal membuat blob untuk $rel" }
+            totalBytes += size
+            entries.put(JSONObject().put("path", rel).put("mode", "100644").put("type", "blob").put("sha", sha))
+        }
+
+        // 4. tree, commit, push
+        progress(GhProgress(3, "Membuat Git tree…", files.size, files.size))
+        val treeBody = JSONObject().put("tree", entries)
+        if (baseTree.isNotBlank()) treeBody.put("base_tree", baseTree)
+        val treeSha = githubRequestRetry("POST", "$base/git/trees", treeBody, headers).optString("sha")
+        require(treeSha.isNotBlank()) { "Gagal membuat Git tree" }
+        progress(GhProgress(3, "Membuat commit…", files.size, files.size))
+        val commitBody = JSONObject().put("message", commitMessage).put("tree", treeSha)
+        if (parentSha.isNotBlank()) commitBody.put("parents", JSONArray().put(parentSha))
+        val newSha = githubRequestRetry("POST", "$base/git/commits", commitBody, headers).optString("sha")
+        require(newSha.isNotBlank()) { "Gagal membuat commit" }
+        progress(GhProgress(3, "Memperbarui branch $branch…", files.size, files.size))
+        if (parentSha.isBlank()) {
+            githubRequestRetry("POST", "$base/git/refs", JSONObject().put("ref", "refs/heads/$branch").put("sha", newSha), headers)
+        } else {
+            githubRequestRetry("PATCH", "$base/git/refs/heads/${encodePath(branch)}", JSONObject().put("sha", newSha).put("force", false), headers)
+        }
+
+        // 5. verifikasi
+        progress(GhProgress(4, "Memeriksa commit di GitHub…", files.size, files.size))
+        val check = githubRequestRetry("GET", "$base/git/ref/heads/${encodePath(branch)}", null, headers)
+        val remoteSha = check.optJSONObject("object")?.optString("sha").orEmpty()
+        require(remoteSha == newSha) { "Verifikasi gagal: branch $branch belum menunjuk ke commit terbaru" }
+        progress(GhProgress(4, "Commit ${newSha.take(7)} terverifikasi", files.size, files.size))
+
+        return GhResult(owner, repo, branch, files.size, totalBytes, newSha, htmlUrl.trimEnd('/'), created, createPrivate)
     }
 
     private fun uploadFolderToGitHub(
-        treeUri: Uri,
-        owner: String,
-        repo: String,
-        token: String,
-        branch: String,
-        commitMessage: String,
-        progress: (String) -> Unit
-    ): String {
-        val root = DocumentFile.fromTreeUri(this, treeUri) ?: error("Folder tidak dapat dibuka")
-        val files = mutableListOf<Pair<String, DocumentFile>>()
-        fun walk(dir: DocumentFile, prefix: String) {
-            dir.listFiles().forEach { child ->
-                val name = child.name ?: return@forEach
-                if (name == ".git" || name == "__MACOSX" || name == "node_modules" || name == ".gradle" || name == "build" || name == ".DS_Store" || name == "Thumbs.db") return@forEach
-                val rel = if (prefix.isBlank()) name else "$prefix/$name"
-                if (child.isDirectory) walk(child, rel) else if (child.isFile) files.add(rel to child)
+        treeUri: Uri, owner: String, repo: String, token: String, branch: String,
+        commitMessage: String, createPrivate: Boolean, progress: (GhProgress) -> Unit
+    ): GhResult {
+        val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, treeUri) ?: error("Folder tidak dapat dibuka")
+        val workDir = File(cacheDir, "github_folder_${System.currentTimeMillis()}").apply { mkdirs() }
+        try {
+            val localRoot = File(workDir, "project").apply { mkdirs() }
+            var count = 0
+            fun copyTree(dir: androidx.documentfile.provider.DocumentFile, target: File) {
+                dir.listFiles().forEach { child ->
+                    val name = child.name ?: return@forEach
+                    if (name == ".git" || name == "__MACOSX" || name == ".DS_Store" || name == "Thumbs.db") return@forEach
+                    val out = File(target, name)
+                    if (child.isDirectory) { out.mkdirs(); copyTree(child, out) }
+                    else if (child.isFile) {
+                        out.parentFile?.mkdirs()
+                        contentResolver.openInputStream(child.uri)?.use { input -> FileOutputStream(out).use { output -> input.copyTo(output) } } ?: error("Tidak bisa membaca $name")
+                        count++
+                        if (count % 10 == 0) progress(GhProgress(0, "Membaca folder… $count file"))
+                    }
+                }
             }
-        }
-        walk(root, "")
-        require(files.isNotEmpty()) { "Folder kosong" }
-        require(files.size <= 3000) { "Maksimal 3000 file per upload" }
-        val base = "https://api.github.com/repos/${Uri.encode(owner)}/${Uri.encode(repo)}"
-        val headers = mapOf("Authorization" to "Bearer $token", "Accept" to "application/vnd.github+json", "X-GitHub-Api-Version" to "2022-11-28", "User-Agent" to "GITLS-Android")
-
-        progress("Memeriksa repository dan branch...")
-        var parentCommit = ""
-        var baseTree = ""
-        val ref = runCatching { githubRequest("GET", "$base/git/ref/heads/${encodePath(branch)}", null, headers) }.getOrNull()
-        if (ref != null) {
-            parentCommit = ref.optJSONObject("object")?.optString("sha").orEmpty()
-            require(parentCommit.isNotBlank()) { "Commit branch tidak ditemukan" }
-            val commit = githubRequest("GET", "$base/git/commits/$parentCommit", null, headers)
-            baseTree = commit.optJSONObject("tree")?.optString("sha").orEmpty()
-        }
-
-        val treeEntries = JSONArray()
-        files.forEachIndexed { index, (path, doc) ->
-            val size = doc.length()
-            require(size <= 90L * 1024L * 1024L) { "File terlalu besar untuk GitHub API: $path" }
-            progress("Upload file ${index + 1}/${files.size}: $path")
-            val bytes = contentResolver.openInputStream(doc.uri)?.use { it.readBytes() } ?: error("Tidak dapat membaca $path")
-            val blob = githubRequest("POST", "$base/git/blobs", JSONObject().put("content", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)).put("encoding", "base64"), headers)
-            val sha = blob.optString("sha")
-            require(sha.isNotBlank()) { "Gagal membuat blob: $path" }
-            treeEntries.put(JSONObject().put("path", path).put("mode", "100644").put("type", "blob").put("sha", sha))
-        }
-        progress("Membuat Git tree...")
-        val treeBody = JSONObject().put("tree", treeEntries)
-        if (baseTree.isNotBlank()) treeBody.put("base_tree", baseTree)
-        val tree = githubRequest("POST", "$base/git/trees", treeBody, headers)
-        val treeSha = tree.optString("sha")
-        require(treeSha.isNotBlank()) { "Gagal membuat Git tree" }
-        progress("Membuat commit...")
-        val parents = JSONArray()
-        if (parentCommit.isNotBlank()) parents.put(parentCommit)
-        val newCommit = githubRequest("POST", "$base/git/commits", JSONObject().put("message", commitMessage).put("tree", treeSha).put("parents", parents), headers)
-        val newSha = newCommit.optString("sha")
-        require(newSha.isNotBlank()) { "Gagal membuat commit" }
-        progress("Mengirim commit ke GitHub...")
-        if (parentCommit.isBlank()) {
-            githubRequest("POST", "$base/git/refs", JSONObject().put("ref", "refs/heads/$branch").put("sha", newSha), headers)
-        } else {
-            githubRequest("PATCH", "$base/git/refs/heads/${encodePath(branch)}", JSONObject().put("sha", newSha).put("force", false), headers)
-        }
-        return "Berhasil: ${files.size} file di-upload ke $owner/$repo ($branch). Token tidak disimpan."
+            progress(GhProgress(0, "Membaca isi folder yang dipilih…"))
+            copyTree(root, localRoot)
+            require(count > 0) { "Folder tidak berisi file yang bisa di-upload" }
+            val files = localRoot.walkTopDown().filter { it.isFile }.map { f ->
+                localRoot.toPath().relativize(f.toPath()).toString().replace(File.separatorChar, '/') to f
+            }.filter { (rel, _) -> !rel.startsWith(".git/") && rel != ".git" && !rel.startsWith("__MACOSX/") && !rel.endsWith(".DS_Store") && !rel.endsWith("Thumbs.db") }.toList()
+            return pushFilesToGitHub(files, owner, repo, token, branch, commitMessage, createPrivate, progress)
+        } finally { workDir.deleteRecursively() }
     }
 
     private data class GithubZipAnalysis(
@@ -6801,29 +7847,31 @@ class MainActivity : Activity() {
         commitMessage: String,
         uploadRoot: String,
         excludedPaths: Set<String>,
-        progress: (String) -> Unit
-    ): String {
+        createPrivate: Boolean,
+        progress: (GhProgress) -> Unit
+    ): GhResult {
         val workDir = File(cacheDir, "github_zip_${System.currentTimeMillis()}").apply { mkdirs() }
         val zipFile = File(workDir, "upload.zip")
         try {
+            progress(GhProgress(0, "Membaca file ZIP…"))
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(zipFile).use { output -> input.copyTo(output) }
             } ?: error("ZIP tidak dapat dibaca")
-            progress("Mengekstrak ZIP...")
+            progress(GhProgress(0, "Mengekstrak ZIP…"))
             val extracted = File(workDir, "src").apply { mkdirs() }
             unzipSafeForGithub(zipFile, extracted)
 
             val rootPath = uploadRoot.trim('/').trim()
             val files = extracted.walkTopDown()
                 .filter { it.isFile }
-                .filter { f ->
-                    val rel = extracted.toPath().relativize(f.toPath()).toString().replace(File.separatorChar, '/')
+                .map { f -> extracted.toPath().relativize(f.toPath()).toString().replace(File.separatorChar, '/') to f }
+                .filter { (rel, _) ->
                     val inRoot = rootPath.isBlank() || rel == rootPath || rel.startsWith("$rootPath/")
                     val relativeForExclude = if (rootPath.isBlank()) rel else rel.removePrefix("$rootPath/")
                     val excluded = excludedPaths.any { ex ->
                         val normalized = ex.trim('/').replace('\\', '/')
                         rel == normalized || rel.startsWith("$normalized/") ||
-                        relativeForExclude == normalized || relativeForExclude.startsWith("$normalized/")
+                            relativeForExclude == normalized || relativeForExclude.startsWith("$normalized/")
                     }
                     inRoot && !excluded &&
                         !rel.startsWith(".git/") && !rel.startsWith("__MACOSX/") &&
@@ -6831,75 +7879,11 @@ class MainActivity : Activity() {
                         rel != ".DS_Store" && !rel.endsWith("/.DS_Store") &&
                         rel != "Thumbs.db" && !rel.endsWith("/Thumbs.db")
                 }
+                .map { (rel, f) -> (if (rootPath.isBlank()) rel else rel.removePrefix("$rootPath/")) to f }
                 .toList()
             require(files.isNotEmpty()) { "Tidak ada file yang tersisa untuk di-upload dari root yang dipilih" }
             require(files.size <= 3000) { "ZIP terlalu banyak file (maksimal 3000)" }
-
-            val base = "https://api.github.com/repos/${Uri.encode(owner)}/${Uri.encode(repo)}"
-            val headers = mapOf(
-                "Authorization" to "Bearer $token",
-                "Accept" to "application/vnd.github+json",
-                "X-GitHub-Api-Version" to "2022-11-28",
-                "User-Agent" to "GITLS-Android"
-            )
-
-            progress("Memeriksa repository dan branch...")
-            val ref = githubRequest("GET", "$base/git/ref/heads/${encodePath(branch)}", null, headers)
-            val commitSha = ref.optJSONObject("object")?.optString("sha").orEmpty()
-            require(commitSha.isNotBlank()) { "Branch '$branch' tidak ditemukan" }
-            val commit = githubRequest("GET", "$base/git/commits/$commitSha", null, headers)
-            val baseTree = commit.optJSONObject("tree")?.optString("sha").orEmpty()
-            require(baseTree.isNotBlank()) { "Base tree tidak ditemukan" }
-
-            val treeEntries = JSONArray()
-            files.forEachIndexed { index, file ->
-                val absoluteRel = extracted.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/')
-                val rel = if (rootPath.isBlank()) absoluteRel else absoluteRel.removePrefix("$rootPath/")
-                require(rel.isNotBlank() && rel != absoluteRel || rootPath.isBlank() || absoluteRel == rootPath || absoluteRel.startsWith("$rootPath/")) { "Path root tidak valid: $absoluteRel" }
-                val size = file.length()
-                require(size <= 90L * 1024L * 1024L) { "File terlalu besar untuk upload API: $rel" }
-                progress("Upload file ${index + 1}/${files.size}: $rel")
-                val bytes = file.readBytes()
-                val blobBody = JSONObject().apply {
-                    put("content", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
-                    put("encoding", "base64")
-                }
-                val blob = githubRequest("POST", "$base/git/blobs", blobBody, headers)
-                val blobSha = blob.optString("sha")
-                require(blobSha.isNotBlank()) { "Gagal membuat blob untuk $rel" }
-                treeEntries.put(JSONObject().apply {
-                    put("path", rel)
-                    put("mode", "100644")
-                    put("type", "blob")
-                    put("sha", blobSha)
-                })
-            }
-
-            progress("Membuat tree Git...")
-            val treeBody = JSONObject().apply {
-                put("base_tree", baseTree)
-                put("tree", treeEntries)
-            }
-            val tree = githubRequest("POST", "$base/git/trees", treeBody, headers)
-            val treeSha = tree.optString("sha")
-            require(treeSha.isNotBlank()) { "Gagal membuat Git tree" }
-
-            progress("Membuat commit...")
-            val commitBody = JSONObject().apply {
-                put("message", commitMessage)
-                put("tree", treeSha)
-                put("parents", JSONArray().put(commitSha))
-            }
-            val newCommit = githubRequest("POST", "$base/git/commits", commitBody, headers)
-            val newSha = newCommit.optString("sha")
-            require(newSha.isNotBlank()) { "Gagal membuat commit" }
-
-            progress("Push ke branch $branch...")
-            githubRequest("PATCH", "$base/git/refs/heads/${encodePath(branch)}", JSONObject().apply {
-                put("sha", newSha)
-                put("force", false)
-            }, headers)
-            return "Berhasil: ${files.size} file di-push ke $owner/$repo ($branch). Token tidak disimpan."
+            return pushFilesToGitHub(files, owner, repo, token, branch, commitMessage, createPrivate, progress)
         } finally {
             workDir.deleteRecursively()
         }
@@ -6978,6 +7962,8 @@ class MainActivity : Activity() {
 
     private fun zipTool() {
         clearPage("ZIP / UNZIP")
+        toolWorkspace("ZIP / UNZIP", "Kompres atau ekstrak file di penyimpanan aplikasi dengan batas aman.", "zip-box")
+        toolWorkspaceSection("COMPRESS", "Masukkan nama file atau folder yang akan dibuat ZIP.")
         val src = edit("Nama file/folder di app storage")
         content.addView(src)
         content.addView(button("Buat ZIP") {
@@ -6991,6 +7977,7 @@ class MainActivity : Activity() {
                 }
             }
         })
+        toolWorkspaceSection("EXTRACT", "Masukkan nama ZIP yang berada di app storage.")
         val zip = edit("Nama .zip")
         content.addView(zip)
         content.addView(button("Ekstrak ZIP") {
@@ -8059,6 +9046,9 @@ class MainActivity : Activity() {
     private fun calculatorTool(scientific: Boolean) {
         // Calculator gets its own edge-to-edge content area: no search bar and no bottom navigation.
         clearPage(if (scientific) "Kalkulator Ilmiah" else "Kalkulator Dasar")
+        val calcTitle = if (scientific) "Kalkulator Ilmiah" else "Kalkulator Dasar"
+        content.setPadding(dp(8), dp(4), dp(8), dp(10))
+        addToolHeader(calcTitle, if (scientific) "Perhitungan ilmiah dengan keypad responsif." else "Perhitungan cepat dengan keypad yang nyaman di layar sentuh.", "calculator")
         content.setPadding(0, 0, 0, dp(10))
 
         val display = calcDisplay()
@@ -8961,6 +9951,8 @@ class MainActivity : Activity() {
 
     private fun textStatTool() {
         clearPage("Statistik Teks")
+        addToolHeader("Statistik Teks", "Hitung karakter, kata, dan baris dari teks dengan cepat.", "format-letter-case")
+        content.addView(toolSection("INPUT", "Masukkan teks yang ingin dianalisis."))
         val e=edit("Teks", true); content.addView(e)
         content.addView(button("Hitung") {
             val s=e.text.toString()
@@ -8970,6 +9962,8 @@ class MainActivity : Activity() {
 
     private fun caseTool() {
         clearPage("Case Converter")
+        addToolHeader("Case Converter", "Ubah kapitalisasi teks tanpa meninggalkan halaman.", "format-letter-case")
+        content.addView(toolSection("INPUT", "Masukkan teks yang ingin diubah."))
         val e=edit("Teks", true); content.addView(e)
         content.addView(button("UPPER") { output(e.text.toString().toUpperCase(Locale.getDefault())) })
         content.addView(button("lower") { output(e.text.toString().toLowerCase(Locale.getDefault())) })
@@ -8978,13 +9972,19 @@ class MainActivity : Activity() {
 
     private fun dedupeTool() {
         clearPage("Hapus Baris Duplikat")
+        addToolHeader("Hapus Baris Duplikat", "Bersihkan item yang berulang dari daftar teks.", "content-duplicate")
+        content.addView(toolSection("INPUT", "Gunakan satu baris untuk setiap item."))
         val e=edit("Satu baris per item", true); content.addView(e)
         content.addView(button("Hapus Duplikat") { output(e.text.toString().lines().distinct().joinToString("\n")) })
     }
 
     private fun compareTool() {
         clearPage("Bandingkan Teks")
-        val a=edit("Teks A", true); val b=edit("Teks B", true); content.addView(a); content.addView(b)
+        addToolHeader("Bandingkan Teks", "Bandingkan dua teks dan tampilkan baris yang berbeda.", "compare")
+        content.addView(toolSection("INPUT A"))
+        val a=edit("Teks A", true); content.addView(a)
+        content.addView(toolSection("INPUT B"))
+        val b=edit("Teks B", true); content.addView(b)
         content.addView(button("Bandingkan") {
             val aa=a.text.toString().lines(); val bb=b.text.toString().lines()
             val max=maxOf(aa.size,bb.size); val sb=StringBuilder()
@@ -8996,12 +9996,16 @@ class MainActivity : Activity() {
 
     private fun slugTool() {
         clearPage("Slug Generator")
+        addToolHeader("Slug Generator", "Ubah judul menjadi slug URL yang bersih.", "link-variant")
+        content.addView(toolSection("INPUT"))
         val e=edit("Judul"); content.addView(e)
         content.addView(button("Buat Slug") { output(e.text.toString().toLowerCase(Locale.getDefault()).replace(Regex("[^a-z0-9]+"), "-").trim('-')) })
     }
 
     private fun loremTool() {
         clearPage("Lorem Ipsum")
+        addToolHeader("Lorem Ipsum", "Buat teks placeholder untuk desain, prototipe, dan layout.", "text-box")
+        content.addView(toolSection("GENERATE", "Hasil dapat langsung disalin atau dibagikan."))
         content.addView(button("Buat 100 kata") {
             val words="lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua".split(" ")
             output((0 until 100).joinToString(" ") { words[it % words.size] })
@@ -10908,10 +11912,10 @@ class MainActivity : Activity() {
             "System Studio" to "systemstudio", "Finance Studio" to "financestudio", "Utility Studio" to "utilitystudio",
             "Web Project Builder" to "webproject", "Workspace Center" to "workspace"
         )
-        studios.forEach { (n,id) -> content.addView(settingRowClickable(n, "Buka workspace", "Studio terpadu", "tools") { openTool(id) }) }
+        studios.forEach { (n,id) -> content.addView(settingRowClickable(n, "Buka workspace", "Studio terpadu", iconFor(id)) { openTool(id) }) }
     }
 
-    private fun studioHub(titleText:String, subtitleText:String, tools:List<Pair<String,String>>){ clearPage(titleText); content.addView(subLabel(subtitleText,13f)); tools.forEach{(n,id)->content.addView(settingRowClickable(n,"Buka tool", "", "tools"){openTool(id)})} }
+    private fun studioHub(titleText:String, subtitleText:String, tools:List<Pair<String,String>>){ clearPage(titleText); content.addView(subLabel(subtitleText,13f)); tools.forEach{(n,id)->content.addView(settingRowClickable(n,"Buka tool", "", iconFor(id)){openTool(id)})} }
     private fun networkStudioTool(){ studioHub("Network Studio","Semua alat jaringan dalam satu workspace.",listOf("Ping" to "ping","Port Checker" to "port","DNS Lookup" to "dns","Reverse DNS" to "rdns","Whois" to "whois","Traceroute" to "traceroute","HTTP Headers" to "httpheaders","SSL Certificate" to "ssl","Network Scanner" to "netscanner","Subnet Calculator" to "subnetcalc")) }
     private fun developerStudioTool(){ studioHub("Developer Studio","Editor dan formatter untuk developer.",listOf("Web Project Builder" to "webproject","JSON Formatter" to "jsonformat","XML Formatter" to "xmlformat","Regex Tester" to "regex","Timestamp Converter" to "timestamp","Base64" to "base64","JWT Decoder" to "jwt","UUID Generator" to "uuid","Hash Generator" to "hash")) }
     private fun fileStudioTool(){ studioHub("File Studio","Kelola, cari dan analisis file.",listOf("File Manager" to "filemanager","File Search" to "filesearch","Duplicate Finder" to "dedupe","ZIP / UNZIP" to "zip","File Converter" to "fileconvert","Checksum File" to "checksum","Storage Analyzer" to "storage")) }
