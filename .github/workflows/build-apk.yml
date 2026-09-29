@@ -15,6 +15,10 @@ jobs:
     name: Build Debug APK
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,25 +29,25 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK packages
         run: |
-          sdkmanager "platforms;android-36" \
-                     "build-tools;36.0.0"
-          yes | sdkmanager --licenses
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
       - name: Fix Kotlin textPrimary references
         run: |
-          FILE=$(find . -path "*/src/main/java/*/MainActivity.kt" | head -n 1)
+          FILE=$(find app/src -name "MainActivity.kt" | head -1)
 
           if [ -z "$FILE" ]; then
             echo "ERROR: MainActivity.kt not found"
             exit 1
           fi
 
-          echo "Fixing file: $FILE"
+          echo "Fixing $FILE"
           sed -i 's/textPrimary/textMain/g' "$FILE"
 
       - name: Make Gradle executable
