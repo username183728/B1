@@ -4800,9 +4800,30 @@ class MainActivity : Activity() {
 
     private fun fileManager(dir: File) {
         clearPage("File Manager")
-        content.addView(label(dir.absolutePath, 13f, true))
-        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        controls.addView(button("Folder Baru") {
+        val files = sortFiles(dir.listFiles()?.filter { fileFilterText.isBlank() || it.name.contains(fileFilterText, true) } ?: emptyList())
+        val folders = files.count { it.isDirectory }
+        val regular = files.size - folders
+
+        content.addView(toolHeader("File Manager", dir.name, "folder-multiple-outline"), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
+
+        val path = TextView(this).apply {
+            text = "⌂  ${dir.absolutePath}"
+            textSize = 11f
+            setTextColor(textMuted)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = bg(panel2, 12, line)
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.START
+        }
+        content.addView(path, LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(8) })
+
+        val quick = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        fun quickAction(text: String, icon: String, action: () -> Unit) = MdiIconView(this).apply {
+            setIconName(icon); setIconSize(20f); setTextColor(textMain); contentDescription = text
+            background = bg(panel2, 12, line); isClickable = true; isFocusable = true
+            setPadding(dp(10), dp(10), dp(10), dp(10)); setOnClickListener { action() }
+        }
+        quick.addView(quickAction("Folder baru", "folder-plus-outline") {
             val e = edit("nama folder")
             AlertDialog.Builder(this).setTitle("Folder Baru").setView(e)
                 .setPositiveButton("Buat") { _, _ ->
@@ -4810,34 +4831,66 @@ class MainActivity : Activity() {
                         if (target.exists() || !target.mkdirs()) toast("Folder gagal dibuat") else fileManager(dir)
                     } ?: toast("Nama folder tidak valid")
                 }.setNegativeButton("Batal", null).show()
-        }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(4) })
-        controls.addView(button("Urutkan") { showFileSortDialog(dir) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
-        controls.addView(button("Pilih") { showMultiSelectDialog(dir) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(4) })
-        content.addView(controls)
-        val searchBox = edit("Filter nama file / folder").apply { setText(fileFilterText) }
-        content.addView(searchBox, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(7); bottomMargin = dp(5) })
-        content.addView(button("Terapkan Filter") { fileFilterText = searchBox.text.toString().trim(); fileManager(dir) })
-        content.addView(button("File Terbaru") { recentFilesTool() })
-        content.addView(button("Pilih File dari Android") { pickFileForEditor() })
-        val list0 = dir.listFiles()?.toList() ?: emptyList()
-        val list = sortFiles(list0.filter { fileFilterText.isBlank() || it.name.contains(fileFilterText, true) })
-        if (dir != filesDir) content.addView(button("..") { fileManager(dir.parentFile ?: filesDir) })
-        content.addView(subLabel("${list.size} item • tekan item untuk aksi • pilih untuk operasi massal", 11f))
-        if (list.isEmpty()) content.addView(subLabel("Folder kosong atau filter tidak menemukan hasil.", 13f))
-        list.forEach { f ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(8), dp(4), dp(8), dp(4)); background = bg(panel2, 12, line)
-            }
-            row.addView(MdiIconView(this).apply { setIconName(if (f.isDirectory) "folder-outline" else "file-outline"); setIconSize(24f); setTextColor(textMain); layoutParams = LinearLayout.LayoutParams(dp(38), dp(46)) })
-            val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            info.addView(label(f.name, 13f, true))
-            info.addView(subLabel(if (f.isDirectory) "Folder" else "${bytesText(f.length())} • ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(f.lastModified()))}", 10f))
-            row.addView(info)
-            row.addView(MdiIconView(this).apply { setIconName("dots-vertical"); setIconSize(22f); setTextColor(textMuted); layoutParams = LinearLayout.LayoutParams(dp(38), dp(46)); setOnClickListener { showFileActions(f, dir) } })
-            row.setOnClickListener { if (f.isDirectory) fileManager(f) else showFileActions(f, dir) }
-            content.addView(row, LinearLayout.LayoutParams(-1, dp(58)).apply { bottomMargin = dp(5) })
+        }, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(6) })
+        quick.addView(quickAction("Urutkan", "sort-variant") { showFileSortDialog(dir) }, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(6) })
+        quick.addView(quickAction("Pilih banyak", "checkbox-multiple-marked-outline") { showMultiSelectDialog(dir) }, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(6) })
+        quick.addView(quickAction("File Android", "file-import-outline") { pickFileForEditor() }, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(10) })
+        val count = TextView(this).apply {
+            text = "$folders folder  •  $regular file"
+            textSize = 11f; setTextColor(textMuted); gravity = Gravity.CENTER_VERTICAL
         }
+        quick.addView(count, LinearLayout.LayoutParams(0, dp(46), 1f))
+        content.addView(quick, LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(8) })
+
+        val searchBox = edit("Filter nama file / folder").apply { setText(fileFilterText) }
+        content.addView(searchBox, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(7) })
+        content.addView(button("Terapkan Filter") { fileFilterText = searchBox.text.toString().trim(); fileManager(dir) })
+        if (dir != filesDir) content.addView(button("←  Folder sebelumnya") { fileManager(dir.parentFile ?: filesDir) })
+
+        if (files.isEmpty()) {
+            val empty = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(20), dp(32), dp(20), dp(32)); background = bg(panel2, 18, line) }
+            empty.addView(MdiIconView(this).apply { setIconName("folder-open-outline"); setIconSize(38f); setTextColor(textMuted); layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply { gravity = Gravity.CENTER } })
+            empty.addView(label("Folder kosong", 16f, true).apply { gravity = Gravity.CENTER })
+            empty.addView(subLabel(if (fileFilterText.isBlank()) "Belum ada file atau folder di sini." else "Tidak ada item yang cocok dengan filter.", 11f).apply { gravity = Gravity.CENTER })
+            content.addView(empty)
+            return
+        }
+
+        content.addView(subLabel("${files.size} item  •  ketuk untuk membuka, tekan ⋮ untuk aksi", 11f))
+        files.forEach { f -> content.addView(fileManagerCard(f, dir)) }
+    }
+
+    private fun fileManagerCard(f: File, parent: File): View {
+        val isDir = f.isDirectory
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(8), dp(6), dp(8)); background = bg(panel2, 16, line)
+            isClickable = true; isFocusable = true; contentDescription = if (isDir) "Folder ${f.name}" else "File ${f.name}"
+        }
+        val icon = MdiIconView(this).apply {
+            setIconName(if (isDir) "folder-outline" else fileIconForExtension(f.extension)); setIconSize(25f); setTextColor(textMain)
+            background = bg(panel, 13, line); setPadding(dp(9), dp(9), dp(9), dp(9))
+        }
+        card.addView(icon, LinearLayout.LayoutParams(dp(48), dp(48)).apply { rightMargin = dp(10) })
+        val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        info.addView(label(f.name, 14f, true))
+        info.addView(subLabel(if (isDir) "Folder" else "${bytesText(f.length())}  •  ${SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(f.lastModified()))}", 10f))
+        card.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+        val more = TextView(this).apply { text = "⋮"; textSize = 22f; gravity = Gravity.CENTER; setTextColor(textMuted); contentDescription = "Aksi ${f.name}"; isClickable = true; isFocusable = true; setPadding(dp(8), 0, dp(8), 0); setOnClickListener { showFileActions(f, parent) } }
+        card.addView(more, LinearLayout.LayoutParams(dp(42), dp(48)))
+        card.setOnClickListener { if (isDir) fileManager(f) else showFileActions(f, parent) }
+        return card.apply { layoutParams = LinearLayout.LayoutParams(-1, dp(66)).apply { bottomMargin = dp(7) } }
+    }
+
+    private fun fileIconForExtension(ext: String): String = when (ext.lowercase(Locale.getDefault())) {
+        "kt", "java", "py", "js", "ts", "html", "css", "json", "xml", "yaml", "yml" -> "code-tags"
+        "png", "jpg", "jpeg", "webp", "gif" -> "file-image-outline"
+        "mp3", "wav", "ogg" -> "file-music-outline"
+        "mp4", "mkv", "webm" -> "file-video-outline"
+        "zip", "rar", "7z" -> "zip-box-outline"
+        "pdf" -> "file-pdf-box"
+        "txt", "md" -> "file-document-outline"
+        else -> "file-outline"
     }
 
     private fun sortFiles(files: List<File>): List<File> = when (fileSortMode) {
@@ -6242,7 +6295,7 @@ class MainActivity : Activity() {
         editorMore.visibility = View.GONE
         editorBottomBar.visibility = View.GONE
 
-        content.setPadding(dp(28), dp(10), dp(28), dp(6))
+        content.setPadding(dp(8), dp(6), dp(8), dp(4))
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -6279,18 +6332,66 @@ class MainActivity : Activity() {
             setOnClickListener { renameEditorFile() }
         })
         header.addView(fileCard)
+
+        val tree = TextView(this).apply {
+            text = "☰"
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setTextColor(textMain)
+            background = bg(if (dark) panel2 else Color.rgb(242,244,246), 16, Color.TRANSPARENT)
+            contentDescription = "Project files"
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(6) }
+            setOnClickListener { showEditorProjectTree() }
+        }
+        header.addView(tree)
+
+        val console = TextView(this).apply {
+            text = "›_"
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setTextColor(textMain)
+            background = bg(if (dark) panel2 else Color.rgb(242,244,246), 16, Color.TRANSPARENT)
+            contentDescription = "Console"
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(5) }
+            setOnClickListener { showEditorConsole() }
+        }
+        header.addView(console)
+
         val add = TextView(this).apply {
             text = "+"
-            textSize = 30f
+            textSize = 27f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            background = bg(Color.rgb(16,16,16), 50, Color.TRANSPARENT)
-            layoutParams = LinearLayout.LayoutParams(dp(58), dp(58)).apply { leftMargin = dp(16) }
-            elevation = dp(4).toFloat()
+            background = bg(Color.rgb(16,16,16), 16, Color.TRANSPARENT)
+            contentDescription = "New file"
+            layoutParams = LinearLayout.LayoutParams(dp(46), dp(44)).apply { leftMargin = dp(5) }
+            elevation = dp(3).toFloat()
             setOnClickListener { showEditorModePicker() }
         }
         header.addView(add)
-        content.addView(header, LinearLayout.LayoutParams(-1, dp(66)).apply { bottomMargin = dp(8) })
+        content.addView(header, LinearLayout.LayoutParams(-1, dp(50)).apply { bottomMargin = dp(5) })
+
+        // File tabs: compact, horizontally scrollable, and visually closer to a mobile IDE.
+        val tabsScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, 0, 0, dp(4))
+        }
+        val modeBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val tabModes = listOf("HTML" to "html", "CSS" to "css", "JS" to "js")
+        if (editorMode !in tabModes.map { it.second }) {
+            tabModes.plus(editorModeName(editorMode) to editorMode).forEach { (labelText, mode) ->
+                modeBar.addView(editorTab(labelText, mode), LinearLayout.LayoutParams(-2, dp(38)).apply { rightMargin = dp(5) })
+            }
+        } else {
+            tabModes.forEach { (labelText, mode) ->
+                modeBar.addView(editorTab(labelText, mode), LinearLayout.LayoutParams(-2, dp(38)).apply { rightMargin = dp(5) })
+            }
+        }
+        tabsScroll.addView(modeBar)
+        content.addView(tabsScroll, LinearLayout.LayoutParams(-1, dp(42)))
 
         val work = edit(when (editorMode) {
             "html" -> "Ketik HTML...   ! + Tab/Enter = Emmet"
@@ -6339,6 +6440,77 @@ class MainActivity : Activity() {
         editorContextActions = null
         renderEditorBottomBar(work)
         animateEditorScreen()
+    }
+
+    private fun editorTab(labelText: String, mode: String): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(10), 0, dp(10), 0)
+        background = bg(
+            if (editorMode == mode) (if (dark) panel2 else Color.rgb(232,236,240)) else Color.TRANSPARENT,
+            12,
+            if (editorMode == mode) (if (dark) line else Color.rgb(215,220,224)) else Color.TRANSPARENT
+        )
+        isClickable = true
+        isFocusable = true
+        contentDescription = "Buka tab $labelText"
+        setOnClickListener {
+            if (editorMode != mode) {
+                editorExternalTarget = null
+                editorExternalMode = mode
+                editor(null, mode)
+            }
+        }
+        addView(MdiIconView(this@MainActivity).apply {
+            setIconName(when (mode) {
+                "html" -> "language-html5"
+                "css" -> "language-css3"
+                "js" -> "language-javascript"
+                else -> "file-document-outline"
+            })
+            setIconSize(16f)
+            setTextColor(if (editorMode == mode) textMain else textMuted)
+            layoutParams = LinearLayout.LayoutParams(dp(20), dp(24)).apply { rightMargin = dp(5) }
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = labelText
+            textSize = 11f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(if (editorMode == mode) textMain else textMuted)
+            includeFontPadding = false
+        })
+    }
+
+    private fun showEditorProjectTree() {
+        val root = editorFile?.parentFile ?: prefs.getString("last_workspace", null)?.let { File(it) }
+        val files = root?.listFiles()?.filter { it.isFile && it.name != "workspace.json" }?.sortedBy { it.name.lowercase(Locale.getDefault()) } ?: emptyList()
+        if (files.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Project Files")
+                .setMessage("Belum ada file di workspace ini. Buat file baru dari tombol + di editor.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+        val names = files.map { if (it == editorFile) "✓  ${it.name}" else it.name }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Project Files • ${files.size}")
+            .setItems(names) { _, which -> editor(files[which]) }
+            .setNegativeButton("Tutup", null)
+            .show()
+    }
+
+    private fun showEditorConsole() {
+        val message = if (webBuildReady) {
+            "Build terakhir siap. Gunakan Preview untuk melihat hasil atau Host Wi-Fi untuk menjalankan project."
+        } else {
+            "Console siap. Belum ada proses build yang aktif dari editor ini."
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Console")
+            .setMessage(message)
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun renameEditorFile() {
@@ -11660,47 +11832,119 @@ class MainActivity : Activity() {
     private fun webProjectBuilder() {
         clearPage("Web Project Builder")
         content.setPadding(dp(12), dp(8), dp(12), dp(18))
-        content.addView(subLabel("Upload 1 HTML lengkap, atau gunakan 3 file terpisah HTML + CSS + JavaScript. Build wajib sukses sebelum hosting.", 13f).apply { setPadding(dp(2),0,dp(2),dp(12)) })
 
-        val name=edit("Nama Project", false).apply { hint="my-website" }
+        fun sectionTitle(textValue: String, icon: String): View = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(12), dp(4), dp(8))
+            addView(MdiIconView(this@MainActivity).apply {
+                setIconName(icon); setIconSize(20f); setTextColor(textMain)
+                layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply { rightMargin = dp(6) }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = textValue; textSize = 13f; setTextColor(textMain)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+        }
+
+        val intro = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = bg(if (dark) panel else Color.rgb(246,248,250), 18, if (dark) line else Color.rgb(225,230,234))
+        }
+        val introRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        introRow.addView(MdiIconView(this@MainActivity).apply {
+            setIconName("web"); setIconSize(30f); setTextColor(textMain)
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(10) }
+        })
+        val introText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        introText.addView(TextView(this@MainActivity).apply {
+            text = "Web Project Builder"; textSize = 17f; setTextColor(textMain)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        introText.addView(TextView(this@MainActivity).apply {
+            text = "HTML + CSS + JavaScript → Build → Preview → Host"
+            textSize = 11.5f; setTextColor(textMuted); setPadding(0, dp(3), 0, 0)
+        })
+        introRow.addView(introText, LinearLayout.LayoutParams(0,-2,1f))
+        intro.addView(introRow)
+        content.addView(intro, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+        val name = edit("Nama Project", false).apply { hint = "my-website" }
+        content.addView(sectionTitle("PROJECT", "folder-outline"))
         content.addView(name)
 
-        val html=edit("HTML", true)
-        val css=edit("CSS", true)
-        val js=edit("JavaScript", true)
-        val files = listOf("HTML" to html, "CSS" to css, "JavaScript" to js)
-        files.forEach { (labelText, e) ->
-            e.visibility=View.GONE
-            content.addView(settingRowClickable(labelText, "Editor ${labelText.lowercase()}", "Tulis atau tempel kode $labelText", if(labelText=="HTML") "language-html5" else if(labelText=="CSS") "language-css3" else "language-javascript") { webCodeEditor(labelText, e) })
+        val html = edit("HTML", true)
+        val css = edit("CSS", true)
+        val js = edit("JavaScript", true)
+        val files = listOf(
+            Triple("HTML", "language-html5", html),
+            Triple("CSS", "language-css3", css),
+            Triple("JavaScript", "language-javascript", js)
+        )
+        files.forEach { (labelText, iconName, editorTarget) ->
+            editorTarget.visibility = View.GONE
+            val row = settingRowClickable(labelText, "Editor ${labelText.lowercase()}", "Edit source $labelText", iconName) {
+                webCodeEditor(labelText, editorTarget)
+            }
+            content.addView(row, LinearLayout.LayoutParams(-1, dp(62)).apply { bottomMargin = dp(6) })
         }
 
-        settingsSection("Import File")
-        val importRow=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; weightSum=3f }
-        listOf("Import HTML" to WEB_HTML_PICK_REQUEST, "Import CSS" to WEB_CSS_PICK_REQUEST, "Import JS" to WEB_JS_PICK_REQUEST).forEach { (labelText, request) ->
-            val b=button(labelText) {
-                webImportTarget = when(request) { WEB_HTML_PICK_REQUEST -> html; WEB_CSS_PICK_REQUEST -> css; else -> js }
-                val type=when(request) { WEB_HTML_PICK_REQUEST -> "text/html"; WEB_CSS_PICK_REQUEST -> "text/css"; else -> "text/javascript" }
-                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { this.type=type; addCategory(Intent.CATEGORY_OPENABLE) }, request)
+        content.addView(sectionTitle("IMPORT", "file-import-outline"))
+        val importRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 3f }
+        listOf("HTML" to WEB_HTML_PICK_REQUEST, "CSS" to WEB_CSS_PICK_REQUEST, "JS" to WEB_JS_PICK_REQUEST).forEach { (labelText, request) ->
+            val b = button(labelText) {
+                webImportTarget = when (request) {
+                    WEB_HTML_PICK_REQUEST -> html
+                    WEB_CSS_PICK_REQUEST -> css
+                    else -> js
+                }
+                val type = when (request) {
+                    WEB_HTML_PICK_REQUEST -> "text/html"
+                    WEB_CSS_PICK_REQUEST -> "text/css"
+                    else -> "text/javascript"
+                }
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { this.type = type; addCategory(Intent.CATEGORY_OPENABLE) }, request)
             }
-            importRow.addView(b, LinearLayout.LayoutParams(0,dp(50),1f).apply { marginStart=dp(2); marginEnd=dp(2) })
+            importRow.addView(b, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(2); marginEnd = dp(2) })
         }
         content.addView(importRow)
-        content.addView(subLabel("Mode otomatis: HTML lengkap tanpa CSS/JS = 1 file. Jika HTML membutuhkan style.css atau script.js yang belum diisi, Build akan berhenti dan memberi peringatan.", 11f))
 
-        settingsSection("Build")
-        val status=label("BELUM BUILD",15f,true)
-        webBuildStatusView=status
-        content.addView(status)
-        val actions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; weightSum=2f }
-        val buildButton=button("Build") { buildWebProject(name.text.toString(), html.text.toString(), css.text.toString(), js.text.toString()) }
-        webHostButton=button("Host Wi-Fi Rumah") { hostHomeWifiProject() }.apply { isEnabled=false; alpha=0.45f }
-        actions.addView(buildButton, LinearLayout.LayoutParams(0,dp(58),1f).apply { rightMargin=dp(7) })
-        actions.addView(webHostButton, LinearLayout.LayoutParams(0,dp(58),1f).apply { leftMargin=dp(7) })
+        content.addView(sectionTitle("BUILD PIPELINE", "source-branch-check"))
+        val statusCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = bg(if (dark) panel2 else Color.WHITE, 16, if (dark) line else Color.rgb(225,230,234))
+        }
+        val statusIcon = MdiIconView(this).apply {
+            setIconName("circle-outline"); setIconSize(24f); setTextColor(textMuted)
+            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(8) }
+        }
+        statusCard.addView(statusIcon)
+        val status = TextView(this).apply {
+            text = "BELUM BUILD"
+            textSize = 13f; setTextColor(textMain); setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        webBuildStatusView = status
+        statusCard.addView(status, LinearLayout.LayoutParams(0, -2, 1f))
+        content.addView(statusCard, LinearLayout.LayoutParams(-1, dp(58)))
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 2f }
+        val buildButton = button("Build") {
+            buildWebProject(name.text.toString(), html.text.toString(), css.text.toString(), js.text.toString())
+        }
+        webHostButton = button("Host Wi-Fi") { hostHomeWifiProject() }.apply { isEnabled = false; alpha = 0.45f }
+        actions.addView(buildButton, LinearLayout.LayoutParams(0, dp(54), 1f).apply { rightMargin = dp(5); topMargin = dp(8) })
+        actions.addView(webHostButton, LinearLayout.LayoutParams(0, dp(54), 1f).apply { leftMargin = dp(5); topMargin = dp(8) })
         content.addView(actions)
 
-        content.addView(settingRowClickable("Buka Folder Project", "Lihat hasil project", "folder-outline") { openWebFolder() })
-        content.addView(settingRowClickable("Preview", "Preview setelah Build berhasil", "web") { previewWebProject() })
-        content.addView(subLabel("Hosting Wi-Fi Rumah memakai jaringan Wi-Fi yang sedang terhubung. Password Wi-Fi rumah tidak perlu dimasukkan ke MyTools; perangkat lain cukup tersambung ke jaringan yang sama. MyTools akan memberi URL lokal + QR.", 11f))
+        content.addView(sectionTitle("OUTPUT", "monitor-dashboard"))
+        val outputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 2f }
+        outputRow.addView(button("Preview") { previewWebProject() }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(5) })
+        outputRow.addView(button("Project Files") { openWebFolder() }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(5) })
+        content.addView(outputRow)
+        content.addView(subLabel("Build membuat folder project lokal. Setelah status SUCCESS, Preview dan Host Wi-Fi dapat digunakan.", 11f).apply { setPadding(dp(3), dp(7), dp(3), 0) })
     }
 
     private fun pickWebFile(target: EditText, requestCode: Int) {
@@ -11816,51 +12060,84 @@ class MainActivity : Activity() {
 
     private fun workspaceCenterTool() {
         clearPage("Workspace Center")
-        content.addView(label("Workspace Center", 22f, true))
-        content.addView(subLabel("Kelola project lokal untuk kode, web, data, atau file kerja.", 12f))
-        val name = edit("Nama workspace", false).apply { hint = "contoh: GameProject" }
-        content.addView(name)
-        content.addView(button("Buat Workspace") {
-            val n = name.text.toString().trim()
-            if (n.isBlank()) { toast("Masukkan nama workspace"); return@button }
-            val safe = n.replace(Regex("[^A-Za-z0-9._ -]"), "_").trim().replace(" ", "_")
-            val dir = File(workspaceRoot(), safe)
-            if (!dir.mkdirs() && !dir.isDirectory) { toast("Workspace gagal dibuat"); return@button }
-            File(dir, "workspace.json").writeText(JSONObject().apply {
-                put("name", n); put("createdAt", System.currentTimeMillis()); put("version", 1)
-            }.toString(2), StandardCharsets.UTF_8)
-            prefs.edit().putString("last_workspace", dir.absolutePath).apply()
-            toast("Workspace dibuat: $safe")
-            workspaceCenterTool()
-        })
-        content.addView(button("Refresh") { workspaceCenterTool() })
         val dirs = workspaceRoot().listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.lastModified() } ?: emptyList()
-        if (dirs.isEmpty()) content.addView(subLabel("Belum ada workspace.", 13f))
-        dirs.forEach { dir ->
-            content.addView(settingRowClickable(dir.name, "Buka workspace", dir.absolutePath, "folder-outline") {
-                prefs.edit().putString("last_workspace", dir.absolutePath).apply()
-                workspaceDetailTool(dir)
-            })
+        content.addView(toolHeader("Workspace Center", "Project lokal • ${dirs.size} workspace", "view-dashboard-outline"), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
+        content.addView(subLabel("Satu tempat untuk project Web, kode, data, dan file kerja.", 11f))
+
+        val create = button("+  Workspace Baru") {
+            val name = edit("Nama workspace", false).apply { hint = "contoh: GameProject" }
+            AlertDialog.Builder(this).setTitle("Workspace Baru").setView(name)
+                .setNegativeButton("Batal", null).setPositiveButton("Buat") { _, _ ->
+                    val n = name.text.toString().trim()
+                    if (n.isBlank()) { toast("Masukkan nama workspace"); return@setPositiveButton }
+                    val safe = n.replace(Regex("[^A-Za-z0-9._ -]"), "_").trim().replace(" ", "_")
+                    val dir = File(workspaceRoot(), safe)
+                    if (!dir.mkdirs() && !dir.isDirectory) { toast("Workspace gagal dibuat"); return@setPositiveButton }
+                    File(dir, "workspace.json").writeText(JSONObject().apply { put("name", n); put("createdAt", System.currentTimeMillis()); put("version", 1) }.toString(2), StandardCharsets.UTF_8)
+                    prefs.edit().putString("last_workspace", dir.absolutePath).apply(); toast("Workspace dibuat: $safe"); workspaceCenterTool()
+                }.show()
         }
+        content.addView(create)
+
+        if (dirs.isEmpty()) {
+            val empty = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(20), dp(30), dp(20), dp(30)); background = bg(panel2, 18, line) }
+            empty.addView(MdiIconView(this).apply { setIconName("folder-plus-outline"); setIconSize(38f); setTextColor(textMuted); layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply { gravity = Gravity.CENTER } })
+            empty.addView(label("Belum ada workspace", 16f, true).apply { gravity = Gravity.CENTER })
+            empty.addView(subLabel("Buat project pertama untuk mulai bekerja.", 11f).apply { gravity = Gravity.CENTER })
+            content.addView(empty)
+            return
+        }
+
+        content.addView(toolSection("PROJECTS", "Workspace terbaru muncul di atas."))
+        dirs.forEach { dir -> content.addView(workspaceCard(dir)) }
+    }
+
+    private fun workspaceCard(dir: File): View {
+        val files = dir.listFiles()?.filter { it.name != "workspace.json" } ?: emptyList()
+        val modified = dir.lastModified()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(13), dp(12), dp(13), dp(10)); background = bg(panel2, 18, line)
+            isClickable = true; isFocusable = true; contentDescription = "Workspace ${dir.name}"
+        }
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        top.addView(MdiIconView(this).apply { setIconName("folder-star-outline"); setIconSize(25f); setTextColor(textMain); background = bg(panel, 13, line); setPadding(dp(9), dp(9), dp(9), dp(9)) }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { rightMargin = dp(10) })
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(label(dir.name, 15f, true))
+        texts.addView(subLabel("${files.size} item  •  ${SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(modified))}", 10f))
+        top.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
+        top.addView(TextView(this).apply { text = "›"; textSize = 27f; setTextColor(textMuted); gravity = Gravity.CENTER; layoutParams = LinearLayout.LayoutParams(dp(34), dp(44)) })
+        card.addView(top)
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(8), 0, 0) }
+        fun small(text: String, action: () -> Unit) = TextView(this).apply { this.text = text; textSize = 11f; gravity = Gravity.CENTER; setTextColor(textMain); background = bg(panel, 10, line); isClickable = true; isFocusable = true; setPadding(dp(10), 0, dp(10), 0); setOnClickListener { action() } }
+        actions.addView(small("Buka") { prefs.edit().putString("last_workspace", dir.absolutePath).apply(); workspaceDetailTool(dir) }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { rightMargin = dp(5) })
+        actions.addView(small("Editor") { dir.listFiles()?.firstOrNull { it.isFile && it.name != "workspace.json" }?.let { editor(it) } ?: toast("Belum ada file") }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(5) })
+        card.addView(actions)
+        card.setOnClickListener { prefs.edit().putString("last_workspace", dir.absolutePath).apply(); workspaceDetailTool(dir) }
+        return card.apply { layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) } }
     }
 
     private fun workspaceDetailTool(dir: File) {
         clearPage("Workspace: ${dir.name}")
-        content.addView(label(dir.name, 22f, true))
-        content.addView(subLabel(dir.absolutePath, 11f))
-        content.addView(button("Buat File") {
-            val n = edit("Nama file", false)
-            AlertDialog.Builder(this).setTitle("File baru").setView(n).setNegativeButton("Batal", null).setPositiveButton("Buat") { _, _ ->
-                val name = n.text.toString().trim()
-                if (name.isNotBlank()) runCatching { File(dir, name).writeText("", StandardCharsets.UTF_8); workspaceDetailTool(dir) }.onFailure { toast("Gagal: ${it.message}") }
-            }.show()
-        })
-        content.addView(button("Buka File Pertama di Editor") { dir.listFiles()?.firstOrNull { it.isFile && it.name != "workspace.json" }?.let { editor(it) } ?: toast("Belum ada file di workspace") })
-        content.addView(button("Kembali ke Workspace") { workspaceCenterTool() })
-        val files = dir.listFiles()?.sortedBy { it.name.lowercase(Locale.getDefault()) } ?: emptyList()
-        files.forEach { f -> if (f.name != "workspace.json") content.addView(settingRowClickable(f.name, bytesText(f.length()), if (f.isDirectory) "Folder" else "File", "file-outline") {
-            if (f.isFile) editor(f) else workspaceDetailTool(f)
-        }) }
+        val files = dir.listFiles()?.filter { it.name != "workspace.json" }?.sortedBy { it.name.lowercase(Locale.getDefault()) } ?: emptyList()
+        content.addView(toolHeader(dir.name, "${files.size} item • ${dir.absolutePath}", "folder-open-outline"), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
+        content.addView(compactButtonRow(
+            "+ File" to {
+                val n = edit("Nama file", false)
+                AlertDialog.Builder(this).setTitle("File baru").setView(n).setNegativeButton("Batal", null).setPositiveButton("Buat") { _, _ ->
+                    val name = n.text.toString().trim()
+                    if (name.isBlank()) return@setPositiveButton
+                    runCatching { File(dir, name).writeText("", StandardCharsets.UTF_8); workspaceDetailTool(dir) }.onFailure { toast("Gagal: ${it.message}") }
+                }.show()
+            },
+            "File Manager" to { fileManager(dir) }
+        ))
+        content.addView(toolSection("PROJECT FILES", "Ketuk file untuk membuka editor."))
+        if (files.isEmpty()) content.addView(subLabel("Belum ada file. Buat file pertama dari tombol + File.", 12f))
+        files.forEach { f ->
+            val row = fileManagerCard(f, dir)
+            content.addView(row)
+        }
+        content.addView(button("←  Kembali ke Workspace") { workspaceCenterTool() })
     }
 
     private fun pluginCenterTool() {
