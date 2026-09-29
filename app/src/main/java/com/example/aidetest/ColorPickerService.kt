@@ -50,6 +50,16 @@ class ColorPickerService : Service() {
     private var windowManager: WindowManager? = null
     private var bubble: TextView? = null
     private var panel: LinearLayout? = null
+    private var panelParams: WindowManager.LayoutParams? = null
+    private var panelContent: LinearLayout? = null
+    private var panelMinus: TextView? = null
+    private var panelHeader: LinearLayout? = null
+    private var panelCollapsed = false
+    private var panelDownX = 0f
+    private var panelDownY = 0f
+    private var panelStartX = 0
+    private var panelStartY = 0
+    private var panelMoved = false
     private var colorPreview: View? = null
     private var hexView: TextView? = null
     private var rgbView: TextView? = null
@@ -167,9 +177,42 @@ class ColorPickerService : Service() {
 
         panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-            background = GradientDrawable().apply { setColor(Color.rgb(31,31,33)); cornerRadius = dp(16).toFloat() }
+            setPadding(dp(12), dp(8), dp(12), dp(10))
+            background = panelBackground()
             elevation = dp(10).toFloat()
+        }
+
+        // The whole header can be dragged, so the information card can be placed
+        // anywhere on the screen without interfering with the pipette itself.
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), 0, 0, 0)
+        }
+        val title = TextView(this).apply {
+            text = "Pipet Warna"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        panelMinus = TextView(this).apply {
+            text = "−"
+            textSize = 24f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = solid(Color.rgb(55,55,58), 12)
+            setPadding(0, 0, 0, dp(2))
+            contentDescription = "Minimalkan panel pipet"
+            setOnClickListener { collapsePanel() }
+        }
+        header.addView(title, LinearLayout.LayoutParams(0, dp(36), 1f))
+        header.addView(panelMinus, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(6) })
+        panelHeader = header
+        panel?.addView(header, LinearLayout.LayoutParams(-1, dp(36)))
+
+        panelContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
         }
         colorPreview = View(this).apply { background = solid(lastColor, 10) }
         hexView = TextView(this).apply { text = "#FFFFFF"; textSize = 18f; setTextColor(Color.WHITE); setPadding(0, dp(4), 0, 0) }
@@ -197,16 +240,47 @@ class ColorPickerService : Service() {
         }
         actions.addView(copy, LinearLayout.LayoutParams(0, dp(38), 1f).apply { rightMargin = dp(4) })
         actions.addView(stop, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(4) })
-        panel?.addView(colorPreview, LinearLayout.LayoutParams(dp(38), dp(38)))
-        panel?.addView(hexView)
-        panel?.addView(rgbView)
-        panel?.addView(actions, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(6) })
-        val panelParams = WindowManager.LayoutParams(
-            dp(190), dp(142), type,
+        panelContent?.addView(colorPreview, LinearLayout.LayoutParams(dp(38), dp(38)))
+        panelContent?.addView(hexView)
+        panelContent?.addView(rgbView)
+        panelContent?.addView(actions, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(6) })
+        panel?.addView(panelContent, LinearLayout.LayoutParams(-1, dp(88)).apply { topMargin = dp(4) })
+
+        panelParams = WindowManager.LayoutParams(
+            dp(210), dp(142), type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.START; x = dp(12); y = dp(55) }
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = dp(12); y = dp(70) }
+
+        header.setOnTouchListener { _, event ->
+            val pp = panelParams ?: return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    panelDownX = event.rawX
+                    panelDownY = event.rawY
+                    panelStartX = pp.x
+                    panelStartY = pp.y
+                    panelMoved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - panelDownX).toInt()
+                    val dy = (event.rawY - panelDownY).toInt()
+                    if (kotlin.math.abs(dx) > dp(4) || kotlin.math.abs(dy) > dp(4)) panelMoved = true
+                    pp.x = (panelStartX + dx).coerceIn(0, max(0, screenWidth - pp.width))
+                    pp.y = (panelStartY + dy).coerceIn(0, max(0, screenHeight - pp.height))
+                    runCatching { wm.updateViewLayout(panel, pp) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> true
+                else -> true
+            }
+        }
+        panel?.setOnClickListener {
+            if (panelCollapsed) expandPanel()
+        }
         wm.addView(panel, panelParams)
+        panelCollapsed = false
     }
 
     private fun sampleAtBubble() {
@@ -281,6 +355,61 @@ class ColorPickerService : Service() {
         }
     }
 
+    private fun collapsePanel() {
+        val wm = windowManager ?: return
+        val p = panel ?: return
+        if (panelCollapsed) {
+            expandPanel()
+            return
+        }
+        panelCollapsed = true
+        panelContent?.visibility = View.GONE
+        panelHeader?.visibility = View.GONE
+        panelMinus?.text = "+"
+        panelMinus?.textSize = 22f
+        p.setPadding(0, 0, 0, 0)
+        p.background = panelBackground(collapsed = true)
+        panelParams?.let { lp ->
+            lp.width = dp(58)
+            lp.height = dp(58)
+            lp.x = lp.x.coerceIn(0, max(0, screenWidth - lp.width))
+            lp.y = lp.y.coerceIn(0, max(0, screenHeight - lp.height))
+            runCatching { wm.updateViewLayout(p, lp) }
+        }
+        // The sampling pipette/marker disappears in compact mode, matching the
+        // unobtrusive floating-circle behavior.
+        bubble?.visibility = View.GONE
+        marker?.visibility = View.GONE
+    }
+
+    private fun expandPanel() {
+        val wm = windowManager ?: return
+        val p = panel ?: return
+        panelCollapsed = false
+        panelContent?.visibility = View.VISIBLE
+        panelHeader?.visibility = View.VISIBLE
+        panelMinus?.text = "−"
+        panelMinus?.textSize = 24f
+        p.setPadding(dp(12), dp(8), dp(12), dp(10))
+        p.background = panelBackground()
+        panelParams?.let { lp ->
+            lp.width = dp(210)
+            lp.height = dp(142)
+            lp.x = lp.x.coerceIn(0, max(0, screenWidth - lp.width))
+            lp.y = lp.y.coerceIn(0, max(0, screenHeight - lp.height))
+            runCatching { wm.updateViewLayout(p, lp) }
+        }
+        bubble?.visibility = View.VISIBLE
+        marker?.visibility = View.VISIBLE
+    }
+
+    private fun panelBackground(collapsed: Boolean = false): GradientDrawable = GradientDrawable().apply {
+        shape = if (collapsed) GradientDrawable.OVAL else GradientDrawable.RECTANGLE
+        setColor(if (collapsed) Color.argb(190, 35, 35, 38) else Color.argb(242, 31, 31, 33))
+        setStroke(dp(1), Color.argb(if (collapsed) 150 else 90, 255, 255, 255))
+        if (!collapsed) cornerRadius = dp(16).toFloat()
+    }
+
     private fun setColor(color: Int, sampleX: Int? = null, sampleY: Int? = null) {
         lastColor = Color.rgb(Color.red(color), Color.green(color), Color.blue(color))
         val r = Color.red(lastColor); val g = Color.green(lastColor); val b = Color.blue(lastColor)
@@ -341,7 +470,7 @@ class ColorPickerService : Service() {
         val wm = windowManager ?: return
         runCatching { bubble?.let { wm.removeView(it) } }
         runCatching { panel?.let { wm.removeView(it) } }
-        bubble = null; panel = null
+        bubble = null; panel = null; panelParams = null; panelContent = null; panelMinus = null; panelHeader = null
     }
 
     override fun onDestroy() {
