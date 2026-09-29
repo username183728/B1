@@ -2650,7 +2650,7 @@ class MainActivity : Activity() {
         // Output panjang/berbaris banyak (kode, log, JSON) memakai monospace agar rapi.
         val looksLikeCode = safe.contains('\n') || safe.startsWith("{") || safe.startsWith("[")
         val result = TextView(this).apply {
-            text = safe
+            this.text = safe
             textSize = if (looksLikeCode) 13f else 14f
             if (looksLikeCode) typeface = android.graphics.Typeface.MONOSPACE
             setTextColor(textMain)
@@ -2663,7 +2663,7 @@ class MainActivity : Activity() {
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         fun resultAction(textValue: String, iconName: String, primary: Boolean, onClick: () -> Unit): TextView = TextView(this).apply {
-            text = textValue
+            this.text = textValue
             textSize = 13f
             gravity = Gravity.CENTER
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -6451,7 +6451,7 @@ class MainActivity : Activity() {
             textSize = 22f
             gravity = Gravity.CENTER
             setTextColor(textMain)
-            background = bg(if (dark) panel2 else Color.rgb(242,244,246), 16, Color.TRANSPARENT)
+            background = bg(if (isDarkTheme) panel2 else Color.rgb(242,244,246), 16, Color.TRANSPARENT)
             contentDescription = "Project files"
             layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(6) }
             setOnClickListener { showEditorProjectTree() }
@@ -6463,7 +6463,7 @@ class MainActivity : Activity() {
             textSize = 16f
             gravity = Gravity.CENTER
             setTextColor(textMain)
-            background = bg(if (dark) panel2 else Color.rgb(242,244,246), 16, Color.TRANSPARENT)
+            background = bg(if (isDarkTheme) panel2 else Color.rgb(242,244,246), 16, Color.TRANSPARENT)
             contentDescription = "Console"
             layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(5) }
             setOnClickListener { showEditorConsole() }
@@ -6560,9 +6560,9 @@ class MainActivity : Activity() {
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(10), 0, dp(10), 0)
         background = bg(
-            if (editorMode == mode) (if (dark) panel2 else Color.rgb(232,236,240)) else Color.TRANSPARENT,
+            if (editorMode == mode) (if (isDarkTheme) panel2 else Color.rgb(232,236,240)) else Color.TRANSPARENT,
             12,
-            if (editorMode == mode) (if (dark) line else Color.rgb(215,220,224)) else Color.TRANSPARENT
+            if (editorMode == mode) (if (isDarkTheme) line else Color.rgb(215,220,224)) else Color.TRANSPARENT
         )
         isClickable = true
         isFocusable = true
@@ -11963,7 +11963,7 @@ class MainActivity : Activity() {
         val intro = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = bg(if (dark) panel else Color.rgb(246,248,250), 18, if (dark) line else Color.rgb(225,230,234))
+            background = bg(if (isDarkTheme) panel else Color.rgb(246,248,250), 18, if (isDarkTheme) line else Color.rgb(225,230,234))
         }
         val introRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         introRow.addView(MdiIconView(this@MainActivity).apply {
@@ -12028,7 +12028,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(10), dp(14), dp(10))
-            background = bg(if (dark) panel2 else Color.WHITE, 16, if (dark) line else Color.rgb(225,230,234))
+            background = bg(if (isDarkTheme) panel2 else Color.WHITE, 16, if (isDarkTheme) line else Color.rgb(225,230,234))
         }
         val statusIcon = MdiIconView(this).apply {
             setIconName("circle-outline"); setIconSize(24f); setTextColor(textMuted)
