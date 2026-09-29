@@ -875,16 +875,17 @@ class MainActivity : Activity() {
         val surface: Int,
         val border: Int,
         val chip: String,
-        val button: Int
+        val button: Int,
+        val onButton: Int = Color.WHITE
     )
 
     private fun visualTheme(name: String = currentPage): ToolVisualTheme {
         // MyTools uses one consistent monochrome UI. Tool categories may still
         // have different labels, but never introduce colored buttons/accent panels.
         return ToolVisualTheme(
-            Color.rgb(20, 20, 22),
-            Color.rgb(248, 248, 249),
-            Color.rgb(218, 218, 222),
+            textMain,
+            panel2,
+            line,
             when {
                 name.contains("esp", true) || name.contains("iot", true) -> "HARDWARE"
                 name.contains("jaringan", true) || name.contains("network", true) || name.contains("dns", true) || name.contains("ping", true) || name.contains("port", true) || name.contains("http", true) || name.contains("ssl", true) -> "NETWORK"
@@ -896,7 +897,8 @@ class MainActivity : Activity() {
                 name.contains("battery", true) || name.contains("device", true) || name.contains("system", true) || name.contains("wifi", true) -> "SYSTEM"
                 else -> "UTILITY"
             },
-            Color.rgb(15, 15, 16)
+            textMain,
+            if (isDarkTheme) Color.rgb(15, 15, 16) else Color.WHITE
         )
     }
 
@@ -969,6 +971,92 @@ class MainActivity : Activity() {
             cornerRadius = dp(radius).toFloat()
             if (stroke != null) setStroke(dp(1), stroke)
         }
+
+    // ---- Design system helpers (lihat DesignSystem.kt) ----
+    private fun rippleBg(fill: Int, radius: Int = Ds.RADIUS_MD, stroke: Int? = null): Drawable {
+        val base = bg(fill, radius, stroke)
+        val rippleColor = ColorStateList.valueOf(
+            if (isDarkTheme) Color.argb(48, 255, 255, 255) else Color.argb(36, 0, 0, 0)
+        )
+        val mask = bg(Color.WHITE, radius)
+        return RippleDrawable(rippleColor, base, mask)
+    }
+
+    private fun statusColor(state: Ds.State): Int = Ds.statusColor(state, isDarkTheme)
+
+    private fun isSecondaryAction(text: String): Boolean {
+        val t = text.trim().lowercase(Locale.ROOT)
+        return listOf(
+            "salin", "copy", "bagikan", "share", "bersihkan", "clear", "hapus", "reset",
+            "batal", "cancel", "tutup", "close", "kembali", "back", "acak ulang"
+        ).any { t == it || t.startsWith("$it ") }
+    }
+
+    /** Level 1: aksi utama (terisi). */
+    private fun styleAsPrimary(b: TextView) {
+        val theme = visualTheme()
+        b.setTextColor(theme.onButton)
+        b.background = rippleBg(theme.button, Ds.RADIUS_MD, theme.button)
+    }
+
+    /** Level 2: aksi pendukung (outline). */
+    private fun styleAsSecondary(b: TextView) {
+        b.setTextColor(textMain)
+        b.background = rippleBg(panel, Ds.RADIUS_MD, line)
+    }
+
+    /** Level 3: aksi kecil (teks saja, tetap 48dp). */
+    private fun styleAsTertiary(b: TextView) {
+        b.setTextColor(textMain)
+        b.background = rippleBg(Color.TRANSPARENT, Ds.RADIUS_SM)
+    }
+
+    private fun secondaryButton(text: String, onClick: () -> Unit): Button =
+        button(text, onClick).also { styleAsSecondary(it) }
+
+    private fun tertiaryButton(text: String, onClick: () -> Unit): Button =
+        button(text, onClick).also { styleAsTertiary(it) }
+
+    /**
+     * Komponen state reusable: Loading / Success / Error / Empty / Info / Warning.
+     * onRetry (opsional) menampilkan tombol "Coba lagi".
+     */
+    private fun stateCard(
+        state: Ds.State,
+        title: String,
+        message: String = "",
+        onRetry: (() -> Unit)? = null
+    ): LinearLayout {
+        val tint = statusColor(state)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(Ds.SPACE_LG), dp(Ds.SPACE_XL), dp(Ds.SPACE_LG), dp(Ds.SPACE_XL))
+            background = bg(panel2, Ds.RADIUS_LG, line)
+            contentDescription = if (message.isBlank()) title else "$title. $message"
+        }
+        if (state == Ds.State.LOADING) {
+            card.addView(ProgressBar(this).apply { isIndeterminate = true },
+                LinearLayout.LayoutParams(dp(Ds.TOUCH_MIN), dp(Ds.TOUCH_MIN)))
+        } else {
+            card.addView(MdiIconView(this).apply {
+                setIconName(Ds.stateIcon(state)); setIconSize(28f); setTextColor(tint)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        }
+        card.addView(label(title, 15f, true).apply { gravity = Gravity.CENTER; setTextColor(tint) })
+        if (message.isNotBlank()) card.addView(subLabel(message, 13f).apply { gravity = Gravity.CENTER })
+        if (onRetry != null && state == Ds.State.ERROR) {
+            val retry = secondaryButton("Coba lagi", onRetry)
+            card.addView(retry, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(Ds.SPACE_MD) })
+        }
+        return card
+    }
+
+    private fun addEmptyState(title: String = "Belum ada hasil", message: String = "Jalankan tool untuk melihat hasilnya") {
+        content.addView(stateCard(Ds.State.EMPTY, title, message),
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(Ds.SPACE_MD); bottomMargin = dp(Ds.SPACE_MD) })
+    }
 
     private fun saveCurrentPageSnapshot() {
         if (restoringSnapshot || content.childCount == 0) return
@@ -1256,7 +1344,7 @@ class MainActivity : Activity() {
 
     private fun subLabel(text: String, size: Float = 12f): TextView = TextView(this).apply {
         this.text = text
-        textSize = size
+        textSize = size.coerceAtLeast(Ds.TEXT_CAPTION_MIN)
         setTextColor(textMuted)
         setPadding(dp(2), 0, dp(2), 0)
     }
@@ -2332,17 +2420,22 @@ class MainActivity : Activity() {
         textSize = 16f
         setTextColor(textMain)
         setHintTextColor(textMuted)
-        setPadding(dp(14), dp(10), dp(14), dp(10))
+        setPadding(dp(Ds.SPACE_LG), dp(Ds.SPACE_MD), dp(Ds.SPACE_LG), dp(Ds.SPACE_MD))
         val theme = visualTheme()
-        background = bg(theme.surface, 14, theme.border)
+        background = bg(theme.surface, Ds.RADIUS_MD, theme.border)
         isSingleLine = !multiline
         isFocusable = true
         isFocusableInTouchMode = true
+        if (hint.isNotBlank()) contentDescription = hint
+        // Focus state jelas: border 2dp memakai warna teks utama.
         setOnFocusChangeListener { view, focused ->
-            view.background = bg(if (focused) theme.surface else theme.surface, 14, if (focused) theme.button else theme.border)
+            view.background = bg(
+                theme.surface, Ds.RADIUS_MD,
+                if (focused) theme.button else theme.border
+            ).also { d -> if (focused) d.setStroke(dp(2), theme.button) }
         }
         if (multiline) {
-            minLines = 8
+            minLines = 6
             gravity = Gravity.TOP or Gravity.START
             inputType = InputType.TYPE_CLASS_TEXT or
                     InputType.TYPE_TEXT_FLAG_MULTI_LINE or
@@ -2352,28 +2445,34 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             inputType = InputType.TYPE_CLASS_TEXT
         }
+        // Tinggi responsif: ikut tinggi layar (HP kecil s/d besar, portrait/landscape).
+        val multilineHeight = (resources.displayMetrics.heightPixels * 0.30f).toInt()
+            .coerceIn(dp(160), dp(300))
         layoutParams = LinearLayout.LayoutParams(
             -1,
-            if (multiline) dp(300) else dp(62)
-        ).apply { bottomMargin = dp(10) }
+            if (multiline) multilineHeight else -2
+        ).apply { bottomMargin = dp(Ds.SPACE_MD) }
+        if (!multiline) minHeight = dp(56)
     }
 
     private fun button(text: String, onClick: () -> Unit): Button = Button(this).apply {
-        val theme = visualTheme()
         this.text = text
         textSize = 14f
-        minHeight = dp(50)
-        setTextColor(Color.WHITE)
-        background = bg(theme.button, 14, theme.button)
-        setPadding(dp(14), dp(4), dp(14), dp(4))
+        minHeight = dp(Ds.TOUCH_MIN)
+        setPadding(dp(Ds.SPACE_LG), dp(Ds.SPACE_XS), dp(Ds.SPACE_LG), dp(Ds.SPACE_XS))
         setStateListAnimator(null)
         isAllCaps = false
         letterSpacing = 0.01f
-        alpha = 0.98f
         contentDescription = text
         isFocusable = true
-        setOnClickListener { animate().scaleX(0.985f).scaleY(0.985f).setDuration(45).withEndAction { animate().scaleX(1f).scaleY(1f).setDuration(70).start() }.start(); onClick() }
-        layoutParams = LinearLayout.LayoutParams(-1, dp(50)).apply { bottomMargin = dp(8) }
+        // Hierarki otomatis: aksi utama terisi, aksi pendukung (Salin/Hapus/Reset...) outline.
+        if (isSecondaryAction(text)) styleAsSecondary(this) else styleAsPrimary(this)
+        setOnClickListener {
+            animate().scaleX(0.98f).scaleY(0.98f).setDuration(Ds.ANIM_FAST / 2)
+                .withEndAction { animate().scaleX(1f).scaleY(1f).setDuration(Ds.ANIM_FAST).start() }.start()
+            onClick()
+        }
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(Ds.SPACE_SM) }
     }
 
     // Shared modern utility layout. It keeps the monochrome identity while giving
@@ -2414,12 +2513,17 @@ class MainActivity : Activity() {
     }
 
     private fun toolStatus(textValue: String, positive: Boolean = false): TextView = TextView(this).apply {
-        text = "●  $textValue"
-        textSize = 12f
+        val dotColor = statusColor(if (positive) Ds.State.SUCCESS else Ds.State.INFO)
+        val sb = android.text.SpannableStringBuilder("●  $textValue")
+        sb.setSpan(android.text.style.ForegroundColorSpan(dotColor), 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        text = sb
+        textSize = 13f
         setTextColor(textMain)
-        setPadding(dp(13), dp(11), dp(13), dp(11))
-        background = bg(if (positive) panel else panel2, 14, line)
-        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) }
+        minHeight = dp(Ds.TOUCH_MIN)
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(Ds.SPACE_LG), dp(Ds.SPACE_MD), dp(Ds.SPACE_LG), dp(Ds.SPACE_MD))
+        background = bg(if (positive) panel else panel2, Ds.RADIUS_MD, line)
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(Ds.SPACE_SM) }
     }
 
     private fun addToolHeader(titleText: String, description: String, icon: String = "•") {
@@ -2444,8 +2548,9 @@ class MainActivity : Activity() {
         }
         items.forEachIndexed { index, item ->
             val b = button(item.first, item.second)
-            row.addView(b, LinearLayout.LayoutParams(0, dp(50), 1f).apply {
-                if (index > 0) leftMargin = dp(5)
+            if (index == 0) styleAsPrimary(b) else styleAsSecondary(b)
+            row.addView(b, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                if (index > 0) leftMargin = dp(Ds.SPACE_SM)
             })
         }
         return row
@@ -2520,8 +2625,8 @@ class MainActivity : Activity() {
         if (!isSensitiveTool()) saveHistory(currentPage, safe)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(10))
-            background = bg(panel2, 16, line)
+            setPadding(dp(Ds.SPACE_LG), dp(Ds.SPACE_MD), dp(Ds.SPACE_LG), dp(Ds.SPACE_SM))
+            background = bg(panel2, Ds.RADIUS_LG, line)
             contentDescription = "Hasil $currentPage"
         }
         val heading = LinearLayout(this).apply {
@@ -2529,46 +2634,54 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         val icon = MdiIconView(this).apply {
-            setIconName("check-circle-outline")
+            setIconName(Ds.stateIcon(Ds.State.SUCCESS))
             setIconSize(18f)
-            setTextColor(textMain)
-            background = bg(panel, 10, line)
+            setTextColor(statusColor(Ds.State.SUCCESS))
+            background = bg(panel, Ds.RADIUS_SM, line)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        heading.addView(icon, LinearLayout.LayoutParams(dp(34), dp(34)).apply { rightMargin = dp(9) })
+        heading.addView(icon, LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(Ds.SPACE_SM) })
         val headingText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         headingText.addView(label("Hasil", 14f, true))
-        headingText.addView(subLabel("${currentPage} • siap digunakan", 10f))
+        headingText.addView(subLabel("${currentPage} • selesai", 12f))
         heading.addView(headingText, LinearLayout.LayoutParams(0, -2, 1f))
         card.addView(heading)
 
+        // Output panjang/berbaris banyak (kode, log, JSON) memakai monospace agar rapi.
+        val looksLikeCode = safe.contains('\n') || safe.startsWith("{") || safe.startsWith("[")
         val result = TextView(this).apply {
             text = safe
-            textSize = 14f
+            textSize = if (looksLikeCode) 13f else 14f
+            if (looksLikeCode) typeface = android.graphics.Typeface.MONOSPACE
             setTextColor(textMain)
-            setPadding(dp(12), dp(11), dp(12), dp(11))
-            background = bg(panel, 12, line)
+            setPadding(dp(Ds.SPACE_MD), dp(Ds.SPACE_MD), dp(Ds.SPACE_MD), dp(Ds.SPACE_MD))
+            background = bg(panel, Ds.RADIUS_MD, line)
             isTextSelectable = true
             gravity = Gravity.TOP or Gravity.START
         }
-        card.addView(result, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(9); bottomMargin = dp(9) })
+        card.addView(result, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(Ds.SPACE_SM); bottomMargin = dp(Ds.SPACE_SM) })
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        fun resultAction(textValue: String, onClick: () -> Unit): TextView = TextView(this).apply {
+        fun resultAction(textValue: String, iconName: String, primary: Boolean, onClick: () -> Unit): TextView = TextView(this).apply {
             text = textValue
-            textSize = 12f
+            textSize = 13f
             gravity = Gravity.CENTER
-            setTextColor(textMain)
-            background = bg(panel, 10, line)
-            minHeight = dp(44)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            minHeight = dp(Ds.TOUCH_MIN)
             isClickable = true
             isFocusable = true
             contentDescription = textValue
+            if (primary) styleAsPrimary(this) else styleAsSecondary(this)
             setOnClickListener { onClick() }
         }
-        actions.addView(resultAction("Salin") { copyText(safe) }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(4) })
-        actions.addView(resultAction("Bagikan") { shareText(safe) }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(4) })
+        actions.addView(resultAction("Salin", "content-copy", true) { copyText(safe) },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(Ds.SPACE_XS) })
+        actions.addView(resultAction("Bagikan", "share-variant", false) { shareText(safe) },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(Ds.SPACE_XS); rightMargin = dp(Ds.SPACE_XS) })
+        actions.addView(resultAction("Bersihkan", "delete-outline", false) { content.removeView(card) },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(Ds.SPACE_XS) })
         card.addView(actions)
-        content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8); bottomMargin = dp(8) })
+        content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(Ds.SPACE_SM); bottomMargin = dp(Ds.SPACE_SM) })
     }
 
     private fun copyText(value:String) {
