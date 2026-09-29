@@ -83,6 +83,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 class MainActivity : Activity() {
 
     internal lateinit var content: LinearLayout
+    internal lateinit var loadingUi: LoadingUi
     internal lateinit var scroll: ScrollView
     internal lateinit var title: TextView
     internal lateinit var subtitle: TextView
@@ -313,6 +314,8 @@ class MainActivity : Activity() {
         enableImmersiveFullscreen()
 
         content = findViewById(R.id.content)
+        loadingUi = LoadingUi(this)
+        loadingUi.attach(findViewById(android.R.id.content))
         scroll = findViewById(R.id.scroll)
         title = findViewById(R.id.tvTitle)
         subtitle = findViewById(R.id.tvSubtitle)
@@ -441,6 +444,13 @@ class MainActivity : Activity() {
         else if (intent?.getBooleanExtra("open_iot", false) == true) { enterApp(); openTool("espstudio") }
         else if (intent?.getBooleanExtra("quick_expense", false) == true) { enterApp(); financeReaderTool(); showAddTxDialog(FinanceDb(this), false) }
         else if (intent?.getBooleanExtra("quick_income", false) == true) { enterApp(); financeReaderTool(); showAddTxDialog(FinanceDb(this), true) }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && ::loadingUi.isInitialized) {
+            loadingUi.dismiss(findViewById(android.R.id.content), 120L)
+        }
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -1051,8 +1061,24 @@ class MainActivity : Activity() {
             contentDescription = if (message.isBlank()) title else "$title. $message"
         }
         if (state == Ds.State.LOADING) {
-            card.addView(ProgressBar(this).apply { isIndeterminate = true },
-                LinearLayout.LayoutParams(dp(Ds.TOUCH_MIN), dp(Ds.TOUCH_MIN)))
+            val loaderRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            loaderRow.addView(ProgressBar(this).apply { isIndeterminate = true },
+                LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(10) })
+            val shimmer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            repeat(2) { i ->
+                shimmer.addView(View(this@MainActivity).apply {
+                    background = bg(if (i == 0) Color.rgb(224,227,231) else Color.rgb(235,237,240), Ds.RADIUS_SM)
+                }, LinearLayout.LayoutParams(if (i == 0) dp(150) else dp(105), dp(10)).apply {
+                    if (i == 0) bottomMargin = dp(7)
+                })
+            }
+            loaderRow.addView(shimmer)
+            card.addView(loaderRow, LinearLayout.LayoutParams(-2, dp(40)))
         } else {
             card.addView(MdiIconView(this).apply {
                 setIconName(Ds.stateIcon(state)); setIconSize(28f); setTextColor(tint)
@@ -1191,35 +1217,51 @@ class MainActivity : Activity() {
     }
 
     internal fun configureActionForPage(name: String) {
-        when (name) {
-            "IoT Dynamic Topology" -> {
-                action.text = "+"; action.textSize = 28f; action.setOnClickListener { showStudioWidgetPicker() }
+        editorMore.visibility = View.GONE
+        action.text = "⋮"
+        action.textSize = 25f
+        action.contentDescription = "Menu tool"
+        action.setOnClickListener {
+            when {
+                name == "IoT Dynamic Topology" -> showToolOverflowMenu(name, listOf("Tambah widget" to { showStudioWidgetPicker() }))
+                name == "Pengelola Keuangan" -> showToolOverflowMenu(name, listOf("Aksi keuangan" to { showFinanceActions() }))
+                name in rmAllPages -> showToolOverflowMenu(name, listOf(
+                    "Tambah notifikasi" to { showReminderEditor(null) },
+                    "Uji notifikasi" to { sendTestNotification() },
+                    "Pengaturan notifikasi" to { openNotificationSettings() }
+                ))
+                name == "Editor" || name.startsWith("Editor - ") -> showToolOverflowMenu(name, listOf("Pilih mode editor" to { showEditorModePicker() }))
+                else -> showToolOverflowMenu(name)
             }
-            "Pengelola Keuangan" -> {
-                action.text = "+"; action.textSize = 28f; action.setOnClickListener { showFinanceActions() }
-            }
-            in rmAllPages -> {
-                editorMore.visibility = View.GONE
-                action.text = "⋮"; action.textSize = 25f
-                action.setOnClickListener { rmMenu() }
-            }
-            else -> {
-                if (name == "Editor" || name.startsWith("Editor - ")) {
-                    action.text = "+"
-                    action.textSize = 28f
-                    action.setOnClickListener { showEditorModePicker() }
-                    editorMore.visibility = if (name == "Editor" && !editorLanding) View.VISIBLE else View.GONE
-                    editorMore.text = "⋮"
-                    editorMore.textSize = 25f
-                    editorMore.setOnClickListener { showEditorMoreMenu() }
-                } else {
-                    editorMore.visibility = View.GONE
-                    action.text = "⋮"
-                    action.textSize = 25f
-                    action.setOnClickListener { showAbout() }
+        }
+    }
+
+    /** Compact overflow menu shared by every standard tool page. */
+    internal fun showToolOverflowMenu(name: String, extras: List<Pair<String, () -> Unit>> = emptyList()) {
+        val popup = PopupMenu(this, action)
+        popup.menu.add(0, 1, 0, "Riwayat")
+        popup.menu.add(0, 2, 1, "Info")
+        extras.forEachIndexed { index, extra ->
+            popup.menu.add(0, 100 + index, 10 + index, extra.first)
+        }
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> { historyTool(); true }
+                2 -> {
+                    AlertDialog.Builder(this)
+                        .setTitle(name)
+                        .setMessage(toolDescription(name))
+                        .setPositiveButton("OK", null)
+                        .show()
+                    true
+                }
+                else -> {
+                    val index = item.itemId - 100
+                    if (index in extras.indices) { extras[index].second(); true } else false
                 }
             }
         }
+        popup.show()
     }
 
     /**
@@ -1317,10 +1359,9 @@ class MainActivity : Activity() {
         action.visibility = if (isHome) View.GONE else View.VISIBLE
         back.visibility = if (isHome) View.GONE else View.VISIBLE
         configureActionForPage(name)
-        if (!isRoot && name != "Editor" && name !in rmAllPages) {
-            content.addView(toolAccentStrip(name), LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(8) })
-            content.addView(toolControlBar(name), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-        }
+        // Tool pages use a clean single header. Category/READY and the old
+        // status/history/info card were intentionally removed to reduce visual
+        // noise. History + Info now live in the top-right three-dot menu.
         resetSearchSnap(showSearch)
         // Bottom navigation is only for the four root sections. Every tool page,
         // including the Editor landing page, gets the full screen so the bottom
@@ -6823,8 +6864,14 @@ class MainActivity : Activity() {
         ringBox.addView(ring, FrameLayout.LayoutParams(-1, -1))
         val center = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
         center.addView(ghLogo(54, ghInk), LinearLayout.LayoutParams(dp(54), dp(54)).apply { bottomMargin = dp(8) })
-        ghPercentText = ghText("0%", 28f, ghInk, true)
-        center.addView(ghPercentText)
+        ghPercentText = ghText("0%", 28f, ghInk, true).apply {
+            // Keep the percentage exactly centered under the upload icon.
+            gravity = Gravity.CENTER
+            textAlignment = View.TEXT_ALIGNMENT_CENTER
+        }
+        center.addView(ghPercentText, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(2)
+        })
         ringBox.addView(center, FrameLayout.LayoutParams(-1, -1))
         screen.addView(ringBox, LinearLayout.LayoutParams(dp(210), dp(210)).apply { topMargin = dp(6); bottomMargin = dp(14) })
 
@@ -8427,7 +8474,7 @@ class MainActivity : Activity() {
     }
 
     internal fun colorFromHex(raw:String):String { var h=raw.trim().removePrefix("#"); if(h.length==3) h=h.map{"$it$it"}.joinToString(""); if(h.length!=6&&h.length!=8) error("HEX"); val a=if(h.length==8) h.substring(0,2).toInt(16) else 255; val off=if(h.length==8)2 else 0; val r=h.substring(off,off+2).toInt(16); val g=h.substring(off+2,off+4).toInt(16); val b=h.substring(off+4,off+6).toInt(16); val hsv=FloatArray(3); Color.colorToHSV(Color.rgb(r,g,b),hsv); val hsl=rgbToHsl(r,g,b); return "HEX = #${h.toUpperCase(Locale.US)}\nARGB = $a,$r,$g,$b\nRGB = $r,$g,$b\nHSL = ${fmt(hsl[0])}°, ${fmt(hsl[1])}%, ${fmt(hsl[2])}%\nHSV = ${fmt(hsv[0].toDouble())}°, ${fmt((hsv[1]*100).toDouble())}%, ${fmt((hsv[2]*100).toDouble())}%" }
-    internal fun colorFromRgb(raw:String):String { val p=raw.split(",").map{it.trim().toInt()}; if(p.size!=3||p.any{it !in 0..255}) error("RGB"); return colorFromHex("#%02X%02X%02X"itbel("Masukkan tarif pajak sendiri agar sesuai aturan/kontrak yang berlaku.",12f))
+    internal fun colorFromRgb(raw:String):String { val p=raw.split(",").map{it.trim().toInt()}; if(p.size!=3||p.any{it !in 0..255}) error("RGB"); return colorFromHex(String.format(Locale.US, "#%02X%02X%02X", p[0], p[1], p[2])) }
         val gross=edit("Nilai bruto / DPP"); val ppn=edit("PPN (%)"); val pph=edit("PPh Final (%)")
         listOf(gross,ppn,pph).forEach{content.addView(it)}
         content.addView(button("Hitung invoice") { val g=gross.num();val pv=ppn.num();val ph=pph.num(); if(g==null||pv==null||ph==null||g<0||pv<0||ph<0) output("Input tidak valid.") else { val ppnVal=g*pv/100; val pphVal=g*ph/100; val invoice=g+ppnVal; val nett=g+ppnVal-pphVal; output("DPP = ${fmt(g)}\nPPN = ${fmt(ppnVal)}\nTotal invoice = ${fmt(invoice)}\nPPh Final = ${fmt(pphVal)}\nNett setelah PPh = ${fmt(nett)}") } })

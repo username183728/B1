@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag, e.g. v2.34.0'
+        description: 'Release tag, e.g. v2.34.2'
         required: true
         type: string
   push:
@@ -31,8 +31,12 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK platform
-        run: sdkmanager "platforms;android-36"
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
@@ -48,6 +52,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           generate_release_notes: true
           files: |
             app/build/outputs/apk/release/*.apk

@@ -17,6 +17,12 @@ done
 
 test -x gradlew || chmod +x gradlew
 
+# Catch obvious source corruption before Gradle is invoked.
+if grep -RInE 'itbel\(|%02X%02X%02X"[A-Za-z_]+\(' app/src/main/java --include='*.kt'; then
+  echo "Suspicious/corrupted Kotlin source token detected"
+  exit 1
+fi
+
 # Catch accidental duplicate package declarations, which break Kotlin compilation.
 bad=0
 while IFS= read -r -d '' f; do
