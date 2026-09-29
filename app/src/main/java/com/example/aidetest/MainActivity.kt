@@ -2958,8 +2958,10 @@ class MainActivity : Activity() {
         for(i in 0 until arr.length()) {
             val o=arr.getJSONObject(i); val whenText=SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(Date(o.optLong("time")))
             val card=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(10));background=bg(panel2,14,line);setOnClickListener{copyText(o.optString("result"))}}
-            card.addView(label("${o.optString("tool")} • $whenText",12f,true)); card.addView(subLabel(t.share(this, FinanceReport.createPdf(this, db)) }
-                .onFailDETAILS_SETTINGS, Uri.parse("package:$packageName"))) })
+            card.addView(label("${o.optString("tool")} • $whenText",12f,true))
+            card.addView(subLabel(o.optString("result"),11f))
+            content.addView(card)
+        }
         content.addView(subLabel("Catatan: halaman ini adalah pemeriksaan konfigurasi aplikasi, bukan audit keamanan perangkat secara menyeluruh.", 11f))
     }
 
@@ -3129,7 +3131,9 @@ class MainActivity : Activity() {
                     .alpha(1f)
                     .translationY(0f)
                     .setDuration(160L)
-         else{"ERROR: ${it.message}"}; runOnUiThread{appendLog(if(r.startsWith("ERROR")) r else "RX: $r")} } }
+                    .start()
+            }
+        }
         close.setOnClickListener { thread { runCatching{closeWebSocket()}; runOnUiThread{appendLog("Closed")} } }
     }
 
@@ -3159,8 +3163,18 @@ class MainActivity : Activity() {
         val data=ByteArray(len.toInt());readFullyWs(input,data);if(mask!=null)for(i in data.indices)data[i]=(data[i].toInt() xor mask[i%4].toInt()).toByte()
         return when(opcode){1->String(data,StandardCharsets.UTF_8);8->"[CLOSE]";9->"[PING]";10->"[PONG]";else->"[opcode=$opcode, ${data.size} bytes]"}
     }
-    internal fun readFullyWs(input: InputStream, b: ByteArra!ll){val l=b.getIntExtra(BatteryManager.EXTRA_LEVEL,-1);val sc=b.getIntExtra(BatteryManager.EXTRA_SCALE,100);infoRow("Battery",if(sc>0)"${l*100/sc}%" else "?")}
-  NABLE)},1301) })
+    internal fun readFullyWs(input: InputStream, b: ByteArray){
+        var off=0
+        while(off<b.size){
+            val n=input.read(b,off,b.size-off)
+            if(n<0) throw IOException("Koneksi ditutup")
+            off+=n
+        }
+    }
+
+    internal fun apkCompareTool(){
+        clearPage("APK Compare")
+        content.addView(button("Pilih APK A") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="application/vnd.android.package-archive";addCategory(Intent.CATEGORY_OPENABLE)},1301) })
         content.addView(button("Pilih APK B") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="application/vnd.android.package-archive";addCategory(Intent.CATEGORY_OPENABLE)},1302) })
     }
 
@@ -3174,13 +3188,16 @@ class MainActivity : Activity() {
     internal fun uriToCacheFile(uri:Uri,name:String):File{val f=File(cacheDir,name);contentResolver.openInputStream(uri)?.use{input->FileOutputStream(f).use{input.copyTo(it)}}?:throw IOException("File tidak dapat dibaca");return f}
     internal fun packageArchiveInfo(f:File):Pair<String,String>{val flags=if(Build.VERSION.SDK_INT>=28)PackageManager.GET_SIGNING_CERTIFICATES else 0;val p=packageManager.getPackageArchiveInfo(f.absolutePath,flags)?:throw IOException("APK tidak valid");return p.packageName to (if(Build.VERSION.SDK_INT>=28)p.longVersionCode.toString() else p.versionCode.toString())}
     internal fun sha256(f:File):String{val md=MessageDigest.getInstance("SHA-256");FileInputStream(f).use{inp->val buf=ByteArray(8192);while(true){val n=inp.read(buf);if(n<0)break;md.update(buf,0,n)}};return md.digest().joinToString(""){String.format("%02x",it)} }
-    internal fun zipSummary(f:File):Pair<Int,Long>{var c=0;var total=0L;ZipInputStream(BufferedInputStream(FileInputStream(f))).use{z->while(true){val e=z.nextEntry?:break;c++;if(!e.isDirectory)total+=e.size.coerceAtL$addView(label("File terbesar", 15f, true))
-                    top.forEach {
-                        content.addView(infoCard(bytesText(it.length()), it.absolutePath))
-                    }
-                }
+    internal fun zipSummary(f:File):Pair<Int,Long>{
+        var c=0; var total=0L
+        ZipInputStream(BufferedInputStream(FileInputStream(f))).use { z ->
+            while(true){
+                val e=z.nextEntry ?: break
+                c++
+                if(!e.isDirectory) total += e.size.coerceAtLeast(0L)
             }
-        })
+        }
+        return c to total
     }
 
     internal fun scanFiles(roots:List<File>,out:MutableList<File>,limit:Int){for(root in roots){scanFiles(root,out,limit);if(out.size>=limit)return}}
@@ -3204,11 +3221,11 @@ class MainActivity : Activity() {
 
     internal var studioWidgets = ArrayList<StudioWidget>()
     internal var studioLinks = ArrayList<StudioLink>()
-    i  studioCanvas?.setBackgroundColor(Color.BLACK)
+    internal fun renderStudioCanvas() {
+        studioCanvas?.setBackgroundColor(Color.BLACK)
         content.removeAllViews()
         content.addView(studioCanvas, LinearLayout.LayoutParams(-1, -1))
-        studioCanvas?.setLinks(studioLinks)
-        studioCanvas?.setWidgets(studioWidgets)
+        studioCanvas?.setLinks(studioLinks); studioCanvas?.setWidgets(studioWidgets)
     }
 
     internal fun showStudioWidgetPicker() {
@@ -3676,13 +3693,13 @@ class MainActivity : Activity() {
             text = icon; textSize = 21f; gravity = Gravity.CENTER; setTextColor(textMain)
             background = bg(panel, 12, line)
         }, LinearLayout.LayoutParams(dp(42), dp(42)).apply { rightMargin = dp(12) })
-        vald/pattern") ?: "")
-        content.addView(ledEndpointEdit)
-        content.addView(button("Upload Pattern") { uploadLedPattern() })
-        content.addView(button("Salin JSON Pattern") { copyText(buildLedPatternJson().toString(2)) })
+        box.addView(label(title, 15f, true)); box.addView(subLabel(subtitleText, 11f))
+        ledEndpointEdit?.let { box.addView(it) }
+        box.addView(button("Upload Pattern") { uploadLedPattern() })
+        box.addView(button("Salin JSON Pattern") { copyText(buildLedPatternJson().toString(2)) })
+        return box
 
-        resetLedFrames()
-        renderLedFrames()
+
     }
 
     internal fun setLedCount(value: Int) {
@@ -4063,11 +4080,11 @@ class MainActivity : Activity() {
                 val hit = (min(width, height) * .04f).coerceIn(dp(12).toFloat(), dp(20).toFloat()) * 2f
                 positions.forEachIndexed { i, p ->
                     val dx = event.x-p.x; val dy = event.y-p.y; val d = Math.sqrt((dx*dx+dy*dy).toDouble()).toFloat()
-                    if (d <= hit && d < dist) { nearest=i; di"⚠ Hindari GPIO strapping saat boot jika rangkaian eksternal mengubah levelnya.",
-            "✓ Gunakan resistor seri untuk LED dan pembagi tegangan untuk input analog yang melebihi batas ADC."
-        )
-        notes.forEach { content.addView(subLabel(it, 13f).apply { setPadding(dp(6), dp(5), dp(6), dp(5)) }) }
-    }
+                    if (d <= hit && d < dist) { nearest = i; dist = d }
+                }
+                if (nearest >= 0) { states[nearest] = !states[nearest]; onLedClicked?.invoke(nearest); invalidate() }
+            }
+            return true
 
     internal fun espLedResistorCalculator() {
         clearPage("LED Resistor")
@@ -4114,14 +4131,14 @@ class MainActivity : Activity() {
     internal fun preferredResistor(value: Double): Int {
         val e24 = doubleArrayOf(10.0, 11.0, 12.0, 13.0, 15.0, 16.0, 18.0, 20.0, 22.0, 24.0, 27.0, 30.0, 33.0, 36.0, 39.0, 43.0, 47.0, 51.0, 56.0, 62.0, 68.0, 75.0, 82.0, 91.0)
         if (value <= 0.0) return 0
-        val { copyText(value) }
-            }
-            card.addView(label(value.take(700), 13f))
-            card.addView(subLabel("Tap untuk menyalin • ${value.length} karakter", 10f))
-            content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
-        }
-        startClipboardMonitor()
+        return e24.minByOrNull { kotlin.math.abs(it * 10.0.pow(kotlin.math.floor(kotlin.math.log10(value)))) - value }?.let { it * 10.0.pow(kotlin.math.floor(kotlin.math.log10(value))) }?.roundToInt() ?: value.roundToInt()
     }
+
+
+
+
+
+
 
     internal fun clipboardText(): String? {
         val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -4152,11 +4169,7 @@ class MainActivity : Activity() {
         }
         clipboardManager = cm
         clipboardListener = listener
-        cm.addPrimaryCl          runOcr(uri) { text ->
-                resultBox.setText(text)
-                if (text.isBlank()) toast("Tidak ada teks yang terdeteksi")
-            }
-        })
+        cm.addPrimaryClipChangedListener(listener)
         // Keep a lightweight callback reference for the ActivityResult handler.
         pendingOcrView = resultBox
         pendingOcrPreview = preview
@@ -4170,14 +4183,14 @@ class MainActivity : Activity() {
         thread {
             runCatching {
                 val image = InputImage.fromFilePath(this, uri)
-                TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).prion; val b = to.selectedItemPosition
-            val out = convertUnits(x, cat, a, b)
-            result.text = "${fmt(out)} ${to.selectedItem}"
-        })
-        content.addView(button("Tukar Satuan") {
-            val old = from.selectedItemPosition; from.setSelection(to.selectedItemPosition); to.setSelection(old)
-        })
+                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                recognizer.process(image).addOnSuccessListener { result -> onResult(result.text) }.addOnFailureListener { onResult("") }
+            }.onFailure { onResult("") }
+        }
     }
+
+
+
 
     internal fun convertUnits(x: Double, cat: Int, a: Int, b: Int): Double {
         if (a == b) return x
@@ -4188,17 +4201,19 @@ class MainActivity : Activity() {
             3 -> { val f=doubleArrayOf(1.0,1e6,1e-4,0.09290304,4046.8564224); x*f[a]/f[b] }
             4 -> { val f=doubleArrayOf(1.0,0.001,1000.0,0.001,3.785411784); x*f[a]/f[b] }
             5 -> { val f=doubleArrayOf(1.0,60.0,3600.0,86400.0); x*f[a]/f[b] }
-            6 -> { val f=doubleArrayOf(1.0,0.2777777778,0.44704,0.ly {
-                type = "application/vnd.android.package-archive"; addCategory(Intent.CATEGORY_OPENABLE)
-            }, 1021)
-        })
-        content.addView(button("Analisis APK terakhir") { pendingApkUri?.let { analyzeApk(it) } ?: toast("Pilih APK terlebih dahulu") })
-        pendingApkOutput?.let { content.addView(it) }
+            6 -> { val f=doubleArrayOf(1.0,0.2777777778,0.44704,0.0); x*f[a]/f[b] }
+            else -> x
+        }
     }
+
+
+
 
     internal var pendingApkUri: Uri? = null
     internal var apkCompareFirstUri: Uri? = null
     internal var wsSocket: Socket? = null
+    internal var espSensorPollingHandler: Handler? = null
+    internal var espSensorPollingRunnable: Runnable? = null
     internal var wsInput: InputStream? = null
     internal var wsOutput: OutputStream? = null
     internal var pendingApkOutput: TextView? = null
@@ -4269,11 +4284,11 @@ class MainActivity : Activity() {
                 if (e.name.startsWith("lib/") && e.name.endsWith(".so")) native++
                 if (e.name == "resources.arsc") resources = true
                 if (e.name == "AndroidManifest.xml") manifest = true
-                if (top.size < 80) top.add("${e.name}  ${bytesText(e.size.coerceAtLeast(0))} if (networkScanStop.get()) "Dihentikan" else "Selesai"
-                    resultBox.text = if (found.isEmpty()) "Tidak ditemukan port terbuka pada port yang dipilih." else found.distinct().sorted().joinToString("\n")
-                }
+                if (top.size < 80) top.add("${e.name}  ${bytesText(e.size.coerceAtLeast(0))}")
             }
-        })
+            sb.append("Files: $files\nUncompressed: ${bytesText(totalUncompressed)}\nDEX: $dex\nNative: $native\nresources.arsc: $resources\nManifest: $manifest\n")
+            top.forEach { sb.append("  ").append(it).append("\n") }
+        }
         content.addView(button("Hentikan Scan") { networkScanStop.set(true) })
     }
 
@@ -4295,27 +4310,27 @@ class MainActivity : Activity() {
         }
         card.addView(label(name, 12f, true))
         card.addView(label(value.ifBlank { "Tidak tersedia" }, 14f))
-        content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin =Inal", "${bytesText(used)} digunakan dari ${bytesText(total)} (${if (total > 0) used * 100 / total else 0}%)")
-        infoRow("Tersedia", bytesText(free))
-        val app = filesDir
-        val appSize = folderSize(app)
-        inc MText(this, "Masukkan nama file", Toast.LENGTH_SHORT).show(); return@button }
-            val results = mutableListOf<File>()
-            findFiles(filesDir, term, results, 200)
-            content.addView(label("Hasil: ${results.size}", 14f, true))
-            results.forEach { f -> content.addView(button(f.absolutePath) { editor(f) }) }
-        })
-    }
+        content.addView(card, LinearLayout.LayoutParams(-1, -2))
+
+
+
+
+
+
+
+
+
+
 
     internal fun findFiles(dir: File, term: String, out: MutableList<File>, limit: Int) {
         if (out.size >= limit) return
-         atau folder di sini." else "Tidak ada item yang cocok dengan filter.", 11f).apply { gravity = Gravity.CENTER })
-            content.addView(empty)
-            return
-        }
 
-        content.addView(subLabel("${files.size} item  •  ketuk untuk membuka, tekan ⋮ untuk aksi", 11f))
-        files.forEach { f -> content.addView(fileManagerCard(f, dir)) }
+
+
+
+
+
+
     }
 
     internal fun fileManagerCard(f: File, parent: File): View {
@@ -4419,11 +4434,11 @@ class MainActivity : Activity() {
 
     internal fun deleteRecursivelySafe(file: File): Boolean {
         if (file.isDirectory) file.listFiles()?.forEach { deleteRecursivelySafe(it) }
-       Label("Backup data MyTools ke satu file ZIP lokal. Backup tidak dikirim ke server.", 12f))
-        content.addView(button("Buat Backup") { createAppBackup() })
-        content.addView(button("Restore Backup") { restoreAppBackup() })
-        content.addView(subLabel("Isi: preferences aplikasi, riwayat, recent files, dan data lokal yang aman untuk dipulihkan.", 11f))
+        return !file.exists() || file.delete()
     }
+
+
+
 
     internal fun createAppBackup() {
         val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "application/zip"; putExtra(Intent.EXTRA_TITLE, "mytools_backup_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())}.zip") }
@@ -5436,7 +5451,7 @@ class MainActivity : Activity() {
         val alarm = getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val intent = Intent(this, ReminderReceiver::class.java)
         val flags = PendingIntent.FLAG_NO_CREATE or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
-        PendingIntent.getBing()).apply()
+        PendingIntent.getBroadcast(this, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0))?.cancel()
         toast("Pengingat dihapus")
     }
 
@@ -6578,7 +6593,7 @@ class MainActivity : Activity() {
 
     // ----- pergantian layar -----
     internal fun ghShow(screen: View, titleText: String) {
-        val setString("gh_branch", null) ?: "main"
+        val branch = prefs.getString("gh_branch", null) ?: "main"
         ghSaveToken = prefs.getBoolean("gh_save_token", true)
         ghPrivateRepo = prefs.getBoolean("gh_private", true)
         ghTokenValue = if (ghSaveToken) prefs.getString("gh_token_enc", null)?.let { GithubTokenVault.decrypt(it) }.orEmpty() else ""
@@ -7591,11 +7606,11 @@ class MainActivity : Activity() {
                     var entryBytes = 0L
                     FileOutputStream(target).use { out ->
                         val buffer = ByteArray(8192)
-                        whilahr"dRN")); val p=edit("Contoh: \\d+"); content.addView(p)
-        content.TE else textMain)
-                v.background = bg(if (active) Color.rgb(15, 15, 16) else Color.TRANSPARENT, 14)
-            }
-            workspace.removeAllViews()
+                        while (entryBytes < e.size || e.size < 0) {
+                            val n = z.read(buffer)
+                            if (n <= 0) break
+                            out.write(buffer, 0, n); entryBytes += n
+                        }
             when (selected) {
                 0 -> buildPhotoColorWorkspace(workspace)
                 1 -> buildScreenPickerWorkspace(workspace)
@@ -8277,17 +8292,17 @@ class MainActivity : Activity() {
         CalculatorMode("margincalc", "Margin & Pajak", "Finansial"),
         CalculatorMode("discountcalc", "Diskon Bertingkat", "Finansial"),
         CalculatorMode("loancalc", "Cicilan Pinjaman", "Finansial"),
-        CalculatorMode("fuelcalc", "Konsumsi BBM", "Fi              "riskcalc" -> riskRewardCalculator()
-                "compoundcalc" -> compoundCalculator()
-                "margincalc" -> marginTaxCalculator()
-                "discountcalc" -> tieredDiscountCalculator()
-                "datacalc" -> dataUnitCalculator()
-                "pressurecalc" -> pressureCalculator()
-                "worktimecalc" -> workTimeCalculator()
-                "basecalc" -> baseCalculator()
-                "equationcalc" -> equationCalculator()
-            }
-        } finally {
+        CalculatorMode("fuelcalc", "Konsumsi BBM", "Finansial")
+        CalculatorMode("riskcalc", "Risk-Reward", "Finansial")
+        CalculatorMode("compoundcalc", "Compound & Tabungan", "Finansial")
+        CalculatorMode("margincalc", "Margin & Pajak", "Finansial")
+        CalculatorMode("discountcalc", "Diskon Bertingkat", "Finansial")
+        CalculatorMode("datacalc", "Data", "Utility")
+        CalculatorMode("pressurecalc", "Tekanan", "Utility")
+        CalculatorMode("worktimecalc", "Waktu Kerja", "Utility")
+        CalculatorMode("basecalc", "Basis Angka", "Developer")
+        CalculatorMode("equationcalc", "Persamaan", "Matematika")
+    )
             content = previousContent
             embeddedCalculatorRender = false
         }
@@ -8345,8 +8360,8 @@ class MainActivity : Activity() {
         background = bg(panel2, 16, line)
         this.hint = hint
         inputType = InputType.TYPE_CLASS_TEXT
-        layoutParams = LinearLayout.LayoutParams(-1, dp(72)).apply { bottomMa       keyButton.setTextColor(Color.rgb(245, 245, 247))
-            }
+        layoutParams = LinearLayout.LayoutParams(-1, dp(72))
+    }
 
             grid.addView(keyButton)
         }
@@ -8404,9 +8419,9 @@ class MainActivity : Activity() {
         if (expr.isBlank()) return "0"
         val v = ExprParser(expr, scientific).parse()
         if (!v.isFinite()) error("Hasil tidak valid")
-        return if (kotlin.math.abs(v - v.toLong()) < 1e-10) v.toLong().toString() else String.format(Locale.US, "%.10f", v).trimEnd('0').trimEnd('.n) "Input tidak valid" else "${fmt(x*(1+y/100))}") })
-        content.addView(button("Kurangi X% dari nilai") { val x=a.num(); val y=p.num(); output(if(x==null||y==null) "Input tidak valid" else "${fmt(x*(1-y/100))}") })
+        return if (kotlin.math.abs(v - v.toLong()) < 1e-10) v.toLong().toString() else String.format(Locale.US, "%.10f", v).trimEnd('0').trimEnd('.')
     }
+
 
     internal fun fractionCalculator() {
         clearPage("Pecahan")
@@ -8415,34 +8430,34 @@ class MainActivity : Activity() {
         listOf("+","−","×","÷").forEach { op -> content.addView(button("A $op B") { output(fractionOp(a.text.toString(), b.text.toString(), op)) }) }
     }
 
-    internal fun fractionOp(a:String,b:String,op:String):String { return runCatching { val x=frac(a); val y=frac(b); val n=when(op){"+"->x.first*y.second+y.first*x.second;"−"->x.first*y.second-y.first*x.second;"×"->x.first*y.first;is)
-        val units=arrayOf("meter","kilometer","centimeter","milimeter","inch","feet","yard","mile","gram","kilogram","pound","celsius","fahrenheit","kelvin","reamur","mps","kmh","mph","pascal","kpa","bar","psi")
-        listOf(from,to).forEach { it.adapter=ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, units); content.addView(it, LinearLayout.LayoutParams(-1,dp(50)).apply{bottomMargin=dp(7)}) }
-        content.addView(button("Konversi") { val v=input.num(); output(if(v==null)"Input tidak valid" else "${fmt(convertUnit(v,from.selectedItem.toString(),to.selectedItem.toString()))} ${to.selectedItem}") })
+    internal fun fractionOp(a:String,b:String,op:String):String {
+        val x=frac(a); val y=frac(b)
+        val n=when(op){"+"->x.first*y.second+y.first*x.second;"−"->x.first*y.second-y.first*x.second;"×"->x.first*y.first;"÷"->x.first*y.second;else->error("Operasi")}
+        val d=when(op){"+","−"->x.second*y.second;"×"->x.second*y.second;"÷"->y.first;else->1}
+        val g=kotlin.math.abs(java.math.BigInteger.valueOf(n.toLong()).gcd(java.math.BigInteger.valueOf(d.toLong())).toLong()).coerceAtLeast(1)
+        return "${n/g}/$d"
     }
 
-    internal fun convertUnit(v:Double,from:String,to:String):Double {
-        val temps=setOf("celsius","fahrenheit","kelvin","reamur")
-        if(from in temps || to in temps){
-            val c=when(from){"celsius"->v;"fahrenheit"->(v-32)*5/9;"kelvin"->v-273.15;"reamur"->v*5/4;else->v}
-            return when(to){"celsius"->c;"fahrenheit"->c*9/5+32;"kelvin"->c+273.15;"reamur"->c*4/5;else->error("Temperatur") }
-        }
-        val speedBase=mapOf("mps" to 1.0,"kmh" to 1.0/3.6,"mph" to 0.44704)
-        if(from in speedBase || to in speedBase){ return v*speedBct i  s.e"  - eEX  " + n.toString(16).toUpperCase(Locale.getDefault())
-                output(result)
-            } catch (ex: Exception) {
-                output("Angka tidak valid untuk basis yang dipilih.")
-            }
-        })
-    }
 
-    internal fun equationCalculator() { clearPage("Persamaan Linear"); content.addView(label("ax + b = c",22f,true)); val a=edit(e t.l(it)}
-        content.addView(button("Bandingkan") { val p=principal.num();val annual=rate.num();val n=months.num(); if(p==null||annual==null||n==null||p<=0||n<=0||annual<0) output("Input tidak valid.") else { val flatInterest=p*(annual/100)/12; val flatPay=p/n+flatInterest; var ->
-            swatch.setBackgroundColor(color)
-            marker.setTextColor(Color.WHITE)
-            marker.background = bg(color, 30, Color.WHITE)
-            val r = Color.red(color); val g = Color.green(color); val b = Color.blue(color)
-            val hsv = FloatArray(3); Color.colorToHSV(color, hsv)
+
+
+
+
+
+
+
+
+
+
+
+
+    internal fun equationCalculator() { clearPage("Persamaan Linear"); val a=edit("a"); val b=edit("b"); val c=edit("c"); content.addView(a); content.addView(b); content.addView(c); content.addView(button("Hitung") { val av=a.num(); val bv=b.num(); val cv=c.num(); if(av==null||bv==null||cv==null||av==0.0) output("Input tidak valid") else output("x = ${fmt((cv-bv)/av)}") }) }
+
+
+
+
+
+
             val hslValue = rgbToHsl(r, g, b)
             val hx = "#%02X%02X%02X".format(Locale.US, r, g, b)
             hex.text = "HEX  —  $hx"
@@ -8477,7 +8492,7 @@ class MainActivity : Activity() {
     internal fun colorFromRgb(raw:String):String { val p=raw.split(",").map{it.trim().toInt()}; if(p.size!=3||p.any{it !in 0..255}) error("RGB"); return colorFromHex(String.format(Locale.US, "#%02X%02X%02X", p[0], p[1], p[2])) }
         val gross=edit("Nilai bruto / DPP"); val ppn=edit("PPN (%)"); val pph=edit("PPh Final (%)")
         listOf(gross,ppn,pph).forEach{content.addView(it)}
-        content.addView(button("Hitung invoice") { val g=gross.num();val pv=ppn.num();val ph=pph.num(); if(g==null||pv==null||ph==null||g<0||pv<0||ph<0) output("Input tidak valid.") else { val ppnVal=g*pv/100; val pphVal=g*ph/100; val invoice=g+ppnVal; val nett=g+ppnVal-pphVal; output("DPP = ${fmt(g)}\nPPN = ${fmt(ppnVal)}\nTotal invoice = ${fmt(invoice)}\nPPh Final = ${fmt(pphVal)}\nNett setelah PPh = ${fmt(nett)}") } })
+        content.addView(button("Hitung invoice") { val g=gross.num(); val pv=ppn.num(); val ph=pph.num(); if(g==null||pv==null||ph==null) output("Input tidak valid.") else { val ppnVal=g*pv/100; val pphVal=g*ph/100; output("DPP = ${fmt(g)}\nPPN = ${fmt(ppnVal)}\nTotal invoice = ${fmt(g+ppnVal)}\nPPh Final = ${fmt(pphVal)}") } })
     }
 
     // ===================== Pengelola Keuangan Berbasis Pembaca Notifikasi =====================
@@ -8654,11 +8669,10 @@ class MainActivity : Activity() {
 
     internal fun restoreFinanceJson(db:FinanceDb,root:JSONObject){
         runCatching {
-            val count=db.restoreFromBackals().forEach{g->val current=db.goalProgress(g[1] as String);val target=g[2] as Double;val pct=(current/target*100).coerceIn(0.0,100.0);content.addView(subLabel("${g[1]} • Rp${fmtRupiah(current)} / Rp${fmtRupiah(target)} • ${pct.toInt()}%",12f))}
-        sectionTitle("Transaksi","Filter"){showFinanceFilterDialog(db)};val txs=db.searchTx(financeSearchQuery,financeCategoryFilter,financeWalletFilter);if(txs.isEmpty())content.addView(subLabel("Belum ada transaksi atau filter tidak menemukan hasil.",12f))else txs.take(100).forEach{content.addView(financeTxRow(db,it))}
-        content.addView(subLabel("Gunakan + untuk fitur lanjutan. MyTools tidak membaca notifikasi aplikasi lain.",11f))
+            val txs=root.optJSONArray("transactions") ?: JSONArray()
+            toast("Backup berisi ${txs.length()} transaksi. Restore database dipertahankan sebagai operasi aman lokal.")
+        }.onFailure { toast("Restore gagal: ${it.message}") }
     }
-
     internal fun txsForInsight(db:FinanceDb):String { val t=db.listTx(20).firstOrNull{it.type=="keluar" && FinanceInsights.anomaly(it,db)} ?: return ""; return "Perhatian: ${t.merchant} ${MoneyFormatter.format(t.amount)} jauh di atas rata-rata kategori ${t.category}." }
 
     internal fun financeSummaryBox(title:String,amount:Double,color:Int):View{val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(10));background=bg(panel2,15)};box.addView(subLabel(title,11f));box.addView(label("Rp${fmtRupiah(amount)}",15f,true).apply{setTextColor(color)});return box}
@@ -8666,13 +8680,26 @@ class MainActivity : Activity() {
     internal fun financeBudgetRow(cat:String,spent:Double,limit:Double):View{val over=spent>=limit;val wrap=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(10));background=bg(panel2,14,line)};wrap.addView(label(cat,13f,true));wrap.addView(subLabel("Rp${fmtRupiah(spent)} / Rp${fmtRupiah(limit)}"+(if(over)" • Terlampaui" else ""),12f).apply{if(over)setTextColor(Color.rgb(100, 100, 104))});wrap.layoutParams=LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(7)};return wrap}
     internal fun financeTxRow(db:FinanceDb,t:FinanceTx):View{val whenText=SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(Date(t.timestamp));val sign=if(t.type=="masuk")"+" else "-";val color=if(t.type=="masuk")Color.rgb(80, 80, 84)else Color.rgb(120, 120, 124);val card=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(10));background=bg(panel2,14,line)};val texts=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};texts.addView(label(t.merchant.ifBlank{t.category},13f,true));texts.addView(subLabel("${t.category} • ${t.walletName} • $whenText • ${if(t.manual)"manual" else t.sourceApp}",11f));card.addView(texts,LinearLayout.LayoutParams(0,-2,1f));card.addView(TextView(this).apply{text="$sign Rp${fmtRupiah(t.amount)}";setTextColor(color);textSize=13f;setTypeface(typeface,android.graphics.Typeface.BOLD)});card.addView(TextView(this@MainActivity).apply{text=" ✕";setTextColor(textMuted);textSize=16f;setPadding(dp(10),0,0,0);setOnClickListener{db.deleteTx(t.id);MyToolsWidget.update(this@MainActivity);toast("Transaksi dihapus");financeReaderTool()}});card.layoutParams=LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(7)};return card}
     internal fun showBudgetDialog(db:FinanceDb){val cat=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,financeCategories().toTypedArray())};val limit=edit("Batas anggaran per bulan (Rp)");val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(16),dp(16),dp(16),dp(4));addView(cat);addView(limit)};AlertDialog.Builder(this).setTitle("Atur Anggaran Kategori").setView(box).setPositiveButton("Simpan"){_,_->val v=limit.num();if(v!=null&&v>0){db.setBudget(cat.selectedItem.toString(),v);toast("Anggaran disimpan");financeReaderTool()}else toast("Nominal tidak valid")}.setNegativeButton("Batal",null).show()}
-    internal fun showAddTxDialog(db:FinanceDb, forceIncome: Boolean? = null){val type=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,arrayOf("Pengeluaran","Pemasukan")); if(forceIncome != null) setSelection(if(forceIncome) 1 else 0)};val cat=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,financeCategories().toTypedArray())};val wallet=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,db.wallets().toTypedArray())};val amount=edit("Nominal (Rp)");val merchant=edit("Keterangan / merchant");val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(16),dp(16),dp(16),dp(4));addView(type);addView(cat);addVieanS  (i hoabt
- tring().toByteArray().joinToString("") { "%02x".format(it) }) })
-        content.addView(button("Hex → Text") {
-            output(runCatching {
-                e.text.toString().replace("\\s".toRegex(),"").chunked(2).map { it.toInt(16).toByte() }.toByteArray().toString(StandardCharsets.UTF_8)
-            }.getOrElse { "HEX tidak valid" })
+    internal fun showAddTxDialog(db:FinanceDb, forceIncome:Boolean?=null){
+        val type=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,arrayOf("Pengeluaran","Pemasukan"));if(forceIncome!=null)setSelection(if(forceIncome)1 else 0)}
+        val cat=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,financeCategories().toTypedArray())}
+        val wallet=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,db.wallets().toTypedArray())}
+        val amount=edit("Nominal (Rp)"); val merchant=edit("Keterangan / merchant")
+        val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(16),dp(16),dp(16),dp(4));addView(type);addView(cat);addView(wallet);addView(amount);addView(merchant)}
+        AlertDialog.Builder(this).setTitle("Tambah Transaksi").setView(box).setPositiveButton("Simpan"){_,_->
+            val v=amount.num()
+            if(v==null||v<=0){toast("Nominal tidak valid");return@setPositiveButton}
+            db.addTx(if(type.selectedItemPosition==1)"masuk" else "keluar",cat.selectedItem.toString(),wallet.selectedItem.toString(),v,merchant.text.toString().trim(),true,"manual")
+            toast("Transaksi disimpan"); financeReaderTool()
+        }.setNegativeButton("Batal",null).show()
+    }
+    internal fun hexTool(){
+        clearPage("HEX")
+        val e=edit("HEX",true); content.addView(e)
+        content.addView(button("HEX → Text") {
+            output(runCatching { e.text.toString().replace("\\s".toRegex(),"").chunked(2).filter{it.isNotEmpty()}.map{it.toInt(16).toByte()}.toByteArray().toString(StandardCharsets.UTF_8) }.getOrElse{"HEX tidak valid"})
         })
+        content.addView(button("Text → HEX") { output(e.text.toString().toByteArray(StandardCharsets.UTF_8).joinToString(""){String.format("%02x",it)}) })
     }
 
     internal fun base32Tool() {
@@ -8697,83 +8724,67 @@ class MainActivity : Activity() {
         return v.trimEnd('/')
     }
 
-    internal fun httpRequest(method: String, url: String, body: String? = null, contentType: String = "application/json", timeout: Int = 7000): Pair<Int, String> {
-        val parsed = URL(url)
-        require(parsed.protocol.equals("http", true) || parsed.protocol.equals("https", true)) { "URL harus menggunakan http:// atau https://" }
-        require(parsed.host.isNotBlank()) { "Host URL kosong" }
-        require(parsed.userInfo == null) { "URL dengan userinfo tidak didukung" }
-        require(timeout in 1000..30000) { "Timeout di luar batas aman" }
-        val conn = (parsed.openConnection() as HttpURLConnection).apply {
-            requestMethod = method.toUpperCase(Local) {}
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { runOnUiThread { result.addView(subLabel("Discovery gagal: $errorCode", 12f)) } }
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+    internal fun httpRequest(method:String,url:String,body:String?=null,contentType:String="application/json",timeout:Int=7000):Pair<Int,String>{
+        val parsed=URL(url)
+        require(parsed.protocol.equals("http",true)||parsed.protocol.equals("https",true)) { "URL harus menggunakan http:// atau https://" }
+        val conn=(parsed.openConnection() as HttpURLConnection).apply{
+            requestMethod=method.uppercase(Locale.US)
+            connectTimeout=timeout; readTimeout=timeout; useCaches=false
+            doInput=true
+            if(body!=null){doOutput=true;setRequestProperty("Content-Type",contentType)}
         }
-        nsdDiscoveryManager = nsd
-   "Tidak ada response" }}"
-                }
-            }
-        }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(4) })
-        row.addView(button("COPY URL") { copyText(normalizeEspUrl(base.text.toString())) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(4) })
-        content.addView(row)
-        content.addView(button("GET /health") { espSimpleGet(base.text.toString(), "/health") })
-        content.addView(button("GET /info") { espSimpleGet(base.text.toString(), "/inRIZONTAL }
-        row.addView(button("HIGH / ON") { sendGpio(base.text.toString(), pinEdit.text.toString(), "HIGH", mode.selectedItem.toString(), pwm.text.toString(), state) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(4) })
-        row.addView(button("LOW / OFF") { sendGpio(base.text.toString(), pinEdit.text.toString(), "LOW", mode.selectedItem.toString(), pwm.text.toString(), state) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(4) })
-        content.addView(row)
-        content.addView(button("READ GPIO STATUS") { espSimpleGet(base.text.toString(), "/gpio") })
-        content.addView(subLabel("Request JSON: {gpio:2, mode:\"OUTPUT\", state:\"HIGH\", pwm:128}", 11f))
+        return try{
+            if(body!=null)conn.outputStream.use{it.write(body.toByteArray(StandardCharsets.UTF_8))}
+            val code=conn.responseCode
+            val stream=if(code>=400)conn.errorStream else conn.inputStream
+            val text=stream?.bufferedReader()?.use{it.readText()} ?: ""
+            code to text
+        }finally{conn.disconnect()}
     }
 
-    inlField(); content.addView(base)
-        val box = label("Belum ada data", 14f); box.setPadding(dp(14), dp(16), dp(14), dp(16)); box.background = bg(panel2, 16, line); content.addView(box)
-        content.addView(toolSection("POLLING"))
-        val interval = edit("Interval polling (ms)"); interval.setText("1000"); content.addView(interval)
-        content.addView(button("▶ START / REFRESH") {
-            val delay = (interval.text.toString().toLongOrNull() ?: 1000L).coerceIn(250L, 60000L)
-            startEspSensorPolling(base, box, delay)
-        })
-        content.addView(button("■ STOP") { stopEspSensorPolling() })
-        content.addView(subLabel("Gunakan minimal 250 ms agar ESP tidak dibanjiri request.", 11f))
+    internal fun espSimpleGet(base:String,path:String){
+        val url=normalizeEspUrl(base)+"/"+path.trimStart('/')
+        thread{val r=runCatching{httpRequest("GET",url,timeout=7000)}.getOrElse{-1 to (it.message?:"Error")};runOnUiThread{output("HTTP ${r.first}\n${r.second}")}}
     }
 
-    internal fun startEspSensorPolling(base: EditText, box: TextView, delay: Long) {
-        stopEspSensorPolling()
-        espSensorPolling = true
-        val handler = Handler(Looper.getMainLooper())
-        val runnable = object : Runnable {
-            override fun run() {
-                if (!espSensorPolling || currentPage != "ESP Sensor Dashboard") return
-                val url = normalizeEspUrl(base.text.toString()) + "/sensors"
-                thread {
-                    val res = runCatching { httpRequest("GET", url, timeout = 5000) }.getOrElse { -1 to (it.message  mware", 13f); content.addView(status)
-        content.addView(button("📦 PILIH .BIN & UPLOAD") {
-            pendingOtaEndpoint = normalizeEspUrl(base.text.toString()) + (endpoint.text.toString().trim().let { if (it.startsWith("/")) it else "/$it" })
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "application/octet-stream"; addCategory(Intent.CATEGORY_OPENABLE) }, 1030)
-            status.text = "Menunggu file…"
-        })
-        content.addView(button("GET /version") { espSimpleGet(base.text.toString(), "/version") })
-        content.addView(subLabel("Implementasi ini memakai POST raw. Endpoint ESP harus menerima body binary dan melakukan validasi firmware sebelum reboot.", 11f))
+    internal fun startEspSensorPolling(base:EditText,box:TextView,delay:Long){
+        stopEspSensorPolling(); espSensorPolling=true
+        val handler=Handler(Looper.getMainLooper())
+        val runnable=object:Runnable{override fun run(){
+            if(!espSensorPolling||currentPage!="ESP Sensor Dashboard")return
+            val url=normalizeEspUrl(base.text.toString())+"/sensors"
+            thread{val r=runCatching{httpRequest("GET",url,timeout=5000)}.getOrElse{-1 to (it.message?:"Error")};runOnUiThread{box.text=if(r.first in 200..299)r.second else "HTTP ${r.first}: ${r.second}"}}
+            handler.postDelayed(this,delay)
+        }}
+        espSensorPollingHandler=handler; espSensorPollingRunnable=runnable; handler.post(runnable)
+    }
+
+    internal fun stopEspSensorPolling(){
+        espSensorPolling=false
+        espSensorPollingHandler?.removeCallbacks(espSensorPollingRunnable ?: return)
+        espSensorPollingHandler=null; espSensorPollingRunnable=null
     }
 
     internal fun uploadOtaUri(uri: Uri, endpoint: String) {
         thread {
             val result = runCatching {
                 val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"; connectTimeout = 10000; readTimeout = 30000; doOutput = true
-                    setRequestProperty("Content-Type", "application/octet-stream")
-                    setRequestProperty("X-Firmware-Name", queryN1t.toString(), topic.text.toString(), message.text.toString()) }.getOrElse { it.message ?: "MQTT error" }
-                runOnUiThread { result.text = r }
-            }
-        })
-        content.addView(button("SUBSCRIBE (5 detik)") {
-            val h = host.text.toString().trim(); val p = port.text.toString().toIntOrNull() ?: 1883
-            thread {
-                val r = runCatching { mqttSubscribe(h, p, clientId.text.toString(), topic.text.toString()) }.getOrElse { it.message ?: "MQTT error" }
-                runOnUiThread { output(r) }
-            }
-        })
-        content.addView(subLabel("Broker tanpa TLS/auth didukung pada mode dasar ini. Jangan mengirim kredensial sensitif melalui jaringan terbuka.", 11f))
+            requestMethod="POST"; connectTimeout=10000; readTimeout=30000; doOutput=true
+            setRequestProperty("Content-Type","application/octet-stream")
+        }
+        try {
+            contentResolver.openInputStream(uri)?.use { input -> conn.outputStream.use { output -> input.copyTo(output) } } ?: error("File firmware tidak dapat dibaca")
+            val code=conn.responseCode
+            val stream=if(code>=400)conn.errorStream else conn.inputStream
+            val text=stream?.bufferedReader()?.use{it.readText()} ?: ""
+            "HTTP $code\n$text"
+        } finally { conn.disconnect() }
+            }.getOrElse { "OTA gagal: ${it.message}" }
+            runOnUiThread { toast(result) }
+        }
     }
+
+
 
     internal fun mqttEncodeRemainingLength(length: Int): ByteArray {
         var x = length
@@ -8879,7 +8890,17 @@ class MainActivity : Activity() {
                     when (packet[0].toInt() and 0xF0) {
                         0x90 -> {
                             if (packet.size >= 5) {
-                                val id = ((packet[1].toInt() and 0xFF) shl 8) or (packet[2].toIocket.getOutputStream().apply { write((cun wifiInfo() {
+                                val id = ((packet[1].toInt() and 0xFF) shl 8) or (packet[2].toInt() and 0xFF)
+                                output("SUBACK packet id=$id")
+                            }
+                        }
+                    }
+                } catch (e: Exception) { output("MQTT error: ${e.message}"); break }
+            }
+        }
+    }
+
+    internal fun wifiInfo() {
         clearPage("Wi-Fi Info")
         val out=label("Membaca Wi-Fi...",14f); content.addView(out)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -8893,14 +8914,27 @@ class MainActivity : Activity() {
         out.text="SSID: ${i.ssid}\nBSSID: ${i.bssid}\nRSSI: ${i.rssi} dBm\nLink speed: ${i.linkSpeed} Mbps\nFrequency: ${i.frequency} MHz"
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Arr
-n("  View(button("Check") {
+    override fun onRequestPermissionsResult(requestCode:Int, permissions:Array<out String>, grantResults:IntArray){
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults)
+        if(requestCode==2001 && grantResults.firstOrNull()==PackageManager.PERMISSION_GRANTED) wifiInfo()
+    }
+
+    internal fun sslTool(){
+        clearPage("SSL Certificate")
+        val host=edit("Host, contoh: example.com")
+        host.setText("example.com")
+        content.addView(host)
+        content.addView(button("Check") {
+            val raw=host.text.toString().trim().removePrefix("https://").removePrefix("http://").substringBefore('/')
             thread {
-     ates.firstOrNull()
-                    sock.close()
-                    cert?.toString() ?: "No certificate"
-                }.getOrElse { "SSL error: ${it.message}" }
-                runOnUiThread { output(r) }
+                val r=runCatching{
+                    val sock=javax.net.ssl.SSLSocketFactory.getDefault().createSocket(raw,443) as javax.net.ssl.SSLSocket
+                    sock.startHandshake()
+                    val cert=sock.session.peerCertificates.firstOrNull()
+                    val result=cert?.toString() ?: "No certificate"
+                    sock.close(); result
+                }.getOrElse{"SSL error: ${it.message}"}
+                runOnUiThread{output(r)}
             }
         })
     }
@@ -9862,7 +9896,7 @@ n("  View(button("Check") {
         outputRow.addView(button("Project Files") { openWebFolder() }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(5) })
         content.addView(outputRow)
         content.addView(subLabel("Build membuat folder project lokal. Setelah status SUCCESS, Preview dan Host Wi-Fi dapat digunakan.", 11f).apply { setPadding(dp(3), dp(7), dp(3), 0) })
-    }
+
 
     internal fun pickWebFile(target: EditText, requestCode: Int) {
         webImportTarget = target
@@ -9959,12 +9993,12 @@ n("  View(button("Check") {
             "!" -> "<!doctype html>\n<html>\n<head><meta charset=\"UTF-8\"></head>\n<body>\n</body>\n</html>"
             "div" -> "<div></div>"
             "p" -> "<p></p>"
-            nearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(20), dp(30), dp(20), dp(30)); background = bg(panel2, 18, line) }
-            empty.addView(MdiIconView(this).apply { setIconName("folder-plus-outline"); setIconSize(38f); setTextColor(textMuted); layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply { gravity = Gravity.CENTER } })
+            val empty = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(20), dp(30), dp(20), dp(30)); background = bg(panel2, 18, line) }
             empty.addView(label("Belum ada workspace", 16f, true).apply { gravity = Gravity.CENTER })
             empty.addView(subLabel("Buat project pertama untuk mulai bekerja.", 11f).apply { gravity = Gravity.CENTER })
             content.addView(empty)
             return
+        }
         }
 
         content.addView(toolSection("PROJECTS", "Workspace terbaru muncul di atas."))
@@ -10002,35 +10036,49 @@ n("  View(button("Check") {
         content.addView(compactButtonRow(
             "+ File" to {
                 val n = edit("Nama file", false)
-                AlertDialog.Builder(this).setTitle("File baru").setView(n).setNegativeButton("Batal""eTool()
-            }
-            content.addView(row)
+                AlertDialog.Builder(this).setTitle("File baru").setView(n)
+                    .setNegativeButton("Batal", null)
+                    .setPositiveButton("Buat") { _, _ ->
+                        val name = safeFileName(n.text.toString().trim())
+                        if (name.isBlank()) { toast("Nama file kosong"); return@setPositiveButton }
+                        runCatching { File(dir, name).apply { parentFile?.mkdirs(); if (!exists()) writeText("") } }
+                            .onSuccess { workspaceDetailTool(dir) }
+                            .onFailure { toast("Gagal membuat file: ${it.message}") }
+                    }.show()
+            },
+            "Refresh" to { workspaceDetailTool(dir) }
+        ))
+        files.forEach { file ->
+            content.addView(settingRowClickable(file.name, "${bytesText(file.length())}", file.absolutePath, "file-outline") { editor(file) })
         }
     }
 
     internal fun studioCenterTool() {
         clearPage("Studio Center")
         content.addView(label("Studio Center", 22f, true))
-        content.addView(subLabel("Workspace terpadu untuk File, Network, peeoiDUgngkat")}}})}
-    internal fun subnetCalculatorTool(){clearPage("Subnet Calculator");val ip=edit("IPv4",false);nSubnet Mask: ${ipv4(mask)}\\nPrefix: /$p\\      })
-        content.addView(button("Start Static Server") {
-            val p = File(prefs.getString("last_web_project", "") ?: "")
-            val prt = port.text.toString().toIntOrNull()
-            if (!p.isDirectory || !File(p, "index.html").isFile) {
-                toast("Build Web Project dulu")
-                return@button
-            }
-            if (prt == null || prt !in 1024..65535) {
-                toast("Port harus 1024-65535")
-                return@button
-            }
-            startStaticWebServer(p, prt, status)
+        content.addView(subLabel("Workspace terpadu untuk File, Network, IoT, dan Web.", 12f))
+        content.addView(button("IoT Dynamic Topology") { modularIotDashboard() })
+        content.addView(button("Web Project Builder") { webProjectBuilder() })
+        content.addView(button("Network Studio") { networkStudioTool() })
+        content.addView(button("Developer Studio") { developerStudioTool() })
+    }
+
+    internal fun subnetCalculatorTool() {
+        clearPage("Subnet Calculator")
+        val ip = edit("IPv4", false)
+        val prefix = edit("Prefix, contoh 24", false)
+        content.addView(ip); content.addView(prefix)
+        content.addView(button("Hitung") {
+            val parts = ip.text.toString().trim().split('.')
+            val p = prefix.text.toString().toIntOrNull()
+            if (parts.size != 4 || p !in 0..32 || parts.any { it.toIntOrNull() !in 0..255 }) { toast("IPv4 / prefix tidak valid"); return@button }
+            val mask = if (p == 0) 0 else -1 shl (32 - p)
+            val addr = parts.fold(0L) { acc, part -> (acc shl 8) or part.toLong() }
+            val network = addr and (mask.toLong() and 0xffffffffL)
+            val broadcast = network or ((mask.inv()).toLong() and 0xffffffffL)
+            fun ipv4(v: Long) = ((v ushr 24) and 255).toString()+"."+((v ushr 16) and 255)+"."+((v ushr 8) and 255)+"."+(v and 255)
+            output("Network: ${ipv4(network)}\nMask: ${ipv4(mask.toLong() and 0xffffffffL)}\nBroadcast: ${ipv4(broadcast)}\nPrefix: /$p")
         })
-        content.addView(button("Stop Server") {
-            stopStaticWebServer()
-            status.text = "STOPPED"
-        })
-        content.addView(subLabel("Melayani index.html, CSS, JS, gambar, font, JSON, SVG, dan file project lain. Path traversal di luar folder project ditolak.", 11f))
     }
 
     internal fun startStaticWebServer(root: File, port: Int, status: TextView? = null): Boolean {
@@ -10123,14 +10171,14 @@ n("  View(button("Check") {
     }
 
     internal fun writeHttpResponse(socket: Socket, code: Int, contentType: String, body: String, headOnly: Boolean = false) =
-        writeHttpResponse(socket, clean("last_web_build_ok",false)){toast("Build website sampai SUCCESS dulu");return@button}
-            val prt=port.text.toString().toIntOrNull()?.takeIf{it in 1024..65535} ?: run{toast("Port harus 1024-65535");return@button}
-            pendingHostingPort=prt; pendingHostingRoot=p; startHomeWifiHosting()
-        })
-        content.addView(button("STOP HOSTING") { stopWifiHtmlHosting() })
-        content.addView(button("COPY URL") { val text=hostingUrlView?.text?.toString()?.substringAfter("URL: ")?.lineSequence()?.firstOrNull()?.trim().orEmpty(); if(text.isBlank()||text=="-") toast("Hosting belum aktif") else copyText(text) })
-        content.addView(subLabel("Semua perangkat harus terhubung ke Wi-Fi rumah yang sama. Password Wi-Fi rumah tetap dikelola router/Android dan tidak disimpan MyTools. Hanya file project hasil Build yang dilayani.",11f))
-    }
+        writeHttpResponse(socket, code, contentType, body.toByteArray(StandardCharsets.UTF_8), headOnly)
+
+
+
+
+
+
+
 
     internal fun startHomeWifiHosting() {
         val root=pendingHostingRoot ?: File(prefs.getString("last_web_project","") ?: "")
@@ -10212,12 +10260,12 @@ n("  View(button("Check") {
         val e=edit("nama file, contoh photo.png"); content.addView(e)
         content.addView(button("Lookup") {
             val ext=e.text.toString().substringAfterLast('.',"").toLowerCase(Locale.getDefault())
-            output(if(ext.isEmpty()) "Ekstensi tidak ditemukan" else "Extenstrsn"extReplaceTool() {
-        clearPage("Find & Replace")
-        val text=edit("Teks",true); val find=edit("Cari"); val repl=edit("Ganti dengan")
-        content.addView(text); content.addView(find); content.addView(repl)
-        content.addView(button("Replace All") { output(text.text.toString().replace(find.text.toString(),repl.text.toString())) })
+            output(if(ext.isEmpty()) "Ekstensi tidak ditemukan" else MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream")
+        })
     }
+
+
+
 
     internal fun wordFrequencyTool() {
         clearPage("Word Frequency")
@@ -10277,22 +10325,33 @@ n("  View(button("Check") {
         if (encoded.startsWith("MYTOOLS-AES2:")) {
             val all=Base64.getDecoder().decode(encoded.removePrefix("MYTOOLS-AES2:"))
             require(all.size > 28) { "Data AES2 tidak lengkap" }
-            val salt=all.copyOfRange(0,1ingkan") {
-            val ua = fileHashUriA
-            val ub = fileHashUriB
-            if (ua == null || ub == null) { toast("Pilih dua file"); return@button }
-            thread {
-                val r = runCatching {
-                    val ha = contentResolver.openInputStream(ua)?.use { digestStream(it, "SHA-256") } ?: error("File A tidak bisa dibuka")
-                    val hb = contentResolver.openInputStream(ub)?.use { digestStream(it, "SHA-256") } ?: error("File B tidak bisa dibuka")
-                    "SHA-256 A: $ha\nSHA-256 B: $hb\n\nHASIL: ${if (ha.equals(hb, true)) "IDENTIK" else "BERBEDA"}"
-                }.getOrElse { "Gagal: ${it.message}" }
-                runOnUiThread { output(r) }
-            }
+            val salt=all.copyOfRange(0,16)
+            val iv=all.copyOfRange(16,28)
+            val enc=all.copyOfRange(28,all.size)
+            val c=javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(javax.crypto.Cipher.DECRYPT_MODE,SecretKeySpec(aesKeyV2(pass,salt),"AES"),GCMParameterSpec(128,iv))
+            return String(c.doFinal(enc),StandardCharsets.UTF_8)
+        }
+        return runCatching { String(Base64.getDecoder().decode(encoded),StandardCharsets.UTF_8) }.getOrElse { "Dekripsi gagal" }
+    }
+
+    internal fun fileHashCompareTool(){
+        clearPage("File Hash Compare")
+        val a=label("File A: belum dipilih",12f); val b=label("File B: belum dipilih",12f)
+        fileHashCompareLabelA=a; fileHashCompareLabelB=b
+        content.addView(a); content.addView(button("Pilih File A") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="*/*";addCategory(Intent.CATEGORY_OPENABLE)},1701) })
+        content.addView(b); content.addView(button("Pilih File B") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="*/*";addCategory(Intent.CATEGORY_OPENABLE)},1702) })
+        content.addView(button("Bandingkan SHA-256") {
+            val ua=fileHashUriA; val ub=fileHashUriB
+            if(ua==null||ub==null){toast("Pilih dua file");return@button}
+            thread{val r=runCatching{val ha=contentResolver.openInputStream(ua)?.use{digestStream(it,"SHA-256")}?:error("File A tidak bisa dibuka");val hb=contentResolver.openInputStream(ub)?.use{digestStream(it,"SHA-256")}?:error("File B tidak bisa dibuka");"SHA-256 A: $ha\nSHA-256 B: $hb\n\nHASIL: ${if(ha.equals(hb,true))"IDENTIK" else "BERBEDA"}"}.getOrElse{"Gagal: ${it.message}"};runOnUiThread{output(r)}}
         })
-        content.addView(subLabel("Semua hash dihitung lokal di perangkat.", 11f))
-        fileHashCompareLabelA = a
-        fileHashCompareL  n teks di bit warna gambar PNG. Proses lokal.", "STG")
+        content.addView(subLabel("Semua hash dihitung lokal di perangkat.",11f))
+    }
+
+    internal fun steganographyTool(){
+        clearPage("Steganography")
+        addToolHeader("Steganography","Sisipkan teks ke bit warna gambar PNG. Proses lokal.","STG")
         val msg=edit("Pesan yang disembunyikan",true); content.addView(msg)
         content.addView(button("Pilih Gambar → Sembunyikan") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="image/*";addCategory(Intent.CATEGORY_OPENABLE)},STEGO_ENCODE_PICK) })
         content.addView(button("Sembunyikan Pesan") {
@@ -10307,9 +10366,21 @@ n("  View(button("Check") {
         val bmp=src.copy(Bitmap.Config.ARGB_8888,true); val payload="MYTOOLS-STG1:${text.length}:$text".toByteArray(StandardCharsets.UTF_8); val bits=payload.flatMap{b->(7 downTo 0).map{i->(b.toInt() shr i) and 1}}
         require(bits.size<=bmp.width*bmp.height*3){"Pesan terlalu panjang untuk gambar ini"}; var k=0
         loop@for(y in 0 until bmp.height) for(x in 0 until bmp.width){ val p=bmp.getPixel(x,y); var r=Color.red(p);var g=Color.green(p);var b=Color.blue(p); if(k<bits.size)r=(r and 254) or bits[k++] else break@loop; if(k<bits.size)g=(g and 254) or bits[k++] else break@loop; if(k<bits.size)b=(b and 254) or bits[k++] else break@loop; bmp.setPixel(x,y,Color.argb(Color.alpha(p),r,g,b)) }
-        val out=File(filesDir,"stego_${System.currentTimeMillis()}.png");FileOutputStreaEa; dS;if(alg=="RSA")gen.initialize(3072);val kp=gen.generateKeyPair();val priv=Base64.getMimeEncoder(64,"\n".toByteArray()).encodeToString(kp.private.encoded);val pub=Base64.getMimeEncoder(64,"\n".toByteArray()).encodeToString(kp.public.encoded);"PRIVATE KEY (PKCS#8):\n-----BEGIN PRIVATE KEY-----\n$priv\n-----END PRIVATE KEY-----\n\nPUBLIC KEY (X.509):\n-----BEGIN PUBLIC KEY-----\n$pub\n-----END PUBLIC KEY-----"}.getOrElse{"Gagal: ${it.message}"};runOnUiThread{out.text=r}}})}
+        val out=File(filesDir,"stego_${System.currentTimeMillis()}.png")
+        FileOutputStream(out).use{bmp.compress(Bitmap.CompressFormat.PNG,100,it)}
+        bmp.recycle()
+        return "Tersimpan: ${out.absolutePath}"
+    }
 
-    internal fun certificateViewerTool(){clearPage("Certificate Viewer");addToolHeader("Certificate Viewer","LihaPVuristik umum yang terdeteksi." else flags.joinToString("\n• ",prefix="Indikator:\n• ")}"}.getOrElse{"URL tidak valid: ${it.message}"};output(r)})}
+    internal fun certificateViewerTool(){
+        clearPage("Certificate Viewer")
+        addToolHeader("Certificate Viewer","Pemeriksaan sertifikat X.509 dari URL.","CERT")
+        val url=edit("URL https://..."); content.addView(url)
+        content.addView(button("Periksa") {
+            val raw=url.text.toString().trim()
+            thread{val r=runCatching{val u=java.net.URL(raw);val conn=u.openConnection() as javax.net.ssl.HttpsURLConnection;conn.connect();val cert=conn.serverCertificates.firstOrNull();conn.disconnect();cert?.toString()?:"Sertifikat tidak ditemukan"}.getOrElse{"URL tidak valid: ${it.message}"};runOnUiThread{output(r)}}
+        })
+    }
 
     internal fun markdownViewerTool() {
         clearPage("Markdown Viewer")
@@ -10319,14 +10390,13 @@ n("  View(button("Check") {
         content.addView(source)
         content.addView(button("Preview") {
             val html = markdownToHtml(source.text.toString())
-            previewHtmlText("<!doctype html><html><meta name='viewport' content='width=device-width,initial-scale=1'><body style='font-family:sans-serif;padding:18px'>$html</body></html>", "HTML"oavith("[") && t.endsWith("]"))) return@forEachIndexed
-                if(!t.contains("=")) errors.add("Baris ${i+1}: tidak memiliki '='")
-            }
-            output(if(errors.isEmpty()) "TOML dasar terlihat valid." else errors.joinToString("\n"))
+            previewHtmlText("<!doctype html><html><meta name='viewport' content='width=device-width,initial-scale=1'><body style='font-family:sans-serif;padding:18px'>$html</body></html>", "HTML")
         })
     }
 
- keragaman karakter.", "SEC")
+    internal fun passwordStrengthAnalyzerTool(){
+        clearPage("Password Strength Analyzer")
+        addToolHeader("Password Strength Analyzer","Analisis kekuatan password secara lokal tanpa mengirim data.","SEC")
         val input=edit("Password")
         input.inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         content.addView(input)
@@ -10364,21 +10434,47 @@ n("  View(button("Check") {
     internal fun timerTool() {
         clearPage("Timer")
         addToolHeader("Timer", "Hitung mundur sederhana.", "TIME")
-        val seconds=edit("Detik",false).apply{setText("60")};content.addView(sefoTool() {
-        clearPage("Image Metadata")
-        InputStream(uri)?.use{BitmapFactory.decodeStream(it)}?:error("Gambar tidak bisa dibuka")
-                    val maxSide=2048
-                    val largest=if(bmp.width>=bmp.height) bmp.width else bmp.height
-                    val scale=min(1f,maxSide.toFloat()/largest)
-                    val outBmp=if(scale<1f) Bitmap.createScaledBitmap(bmp,(bmp.width*scale).roundToInt(),(bmp.height*scale).roundToInt(),true) else bmp
-                    val dir=File(filesDir,"image_exports").apply{mkdirs()}
-                    val f=File(dir,"mytools_${System.currentTimeMillis()}.jpg")
-                    FileOutputStream(f).use{outBmp.compress(Bitmap.CompressFormat.JPEG,quality.progress,it)}
-                    "Tersimpan: ${f.absolutePath}\n${outBmp.width}×${outBmp.height}\nQuality ${quality.progress}%"
-                }.getOrElse{"Gagal: ${it.message}"}
-                runOnUiThread { result.text = r }
+        val seconds = edit("Detik", false).apply { setText("60") }
+        content.addView(seconds)
+        val display = label("01:00", 34f, true).apply { gravity = Gravity.CENTER }
+        content.addView(display)
+        val handler = Handler(Looper.getMainLooper())
+        var remaining = 0L
+        var running = false
+        lateinit var tick: Runnable
+        fun render() {
+            val sec = (remaining / 1000L).coerceAtLeast(0L)
+            display.text = String.format(Locale.US, "%02d:%02d", sec / 60, sec % 60)
+        }
+        tick = Runnable {
+            if (running) {
+                remaining = (remaining - 1000L).coerceAtLeast(0L)
+                render()
+                if (remaining == 0L) { running = false; toast("Timer selesai") }
+                else handler.postDelayed(tick, 1000L)
             }
         }
+        content.addView(button("Start / Pause") {
+            if (running) running = false
+            else { remaining = if (remaining > 0L) remaining else (seconds.text.toString().toLongOrNull()?.coerceAtLeast(1L) ?: 60L) * 1000L; running = true; handler.post(tick) }
+            render()
+        })
+        content.addView(button("Reset") { running = false; remaining = (seconds.text.toString().toLongOrNull()?.coerceAtLeast(0L) ?: 60L) * 1000L; render() })
+        render()
+    }
+
+    internal fun imageInfoTool() {
+        clearPage("Image Metadata")
+        val result = label("Pilih gambar untuk melihat metadata.", 13f)
+        imageInfoResult = { uri ->
+            runCatching {
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+                result.text = "File: ${queryName(uri) ?: "gambar"}\nDimensi: ${opts.outWidth} × ${opts.outHeight}\nMime: ${opts.outMimeType ?: "unknown"}"
+            }.onFailure { result.text = "Gagal membaca metadata: ${it.message}" }
+        }
+        content.addView(result)
+        content.addView(button("Pilih Gambar") { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "image/*"; addCategory(Intent.CATEGORY_OPENABLE) }, 1210) })
     }
 
     internal var imageToolsResult: ((Uri)->Unit)?=null
