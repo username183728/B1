@@ -37,6 +37,7 @@ import android.webkit.MimeTypeMap
 import android.webkit.WebView
 import org.json.JSONArray
 import org.json.JSONObject
+import androidx.documentfile.provider.DocumentFile
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -197,6 +198,10 @@ class MainActivity : Activity() {
     private val FINANCE_BACKUP_CREATE = 2004
     private val FINANCE_BACKUP_OPEN = 2005
     private val GITHUB_ZIP_PICK_REQUEST = 12801
+    private val GITHUB_FOLDER_PICK_REQUEST = 12802
+    private var githubFolderUri: Uri? = null
+    private var githubFolderLabel: TextView? = null
+    private var githubFolderFiles: List<Pair<String, DocumentFile>> = emptyList()
     private var githubZipUri: Uri? = null
     private var githubZipLabel: TextView? = null
     private var githubUploadStatus: TextView? = null
@@ -214,7 +219,7 @@ class MainActivity : Activity() {
 
 
     private val homeTools = listOf(
-        "workspace" to "Workspace Center", "plugincenter" to "Plugin Center", "filemanager" to "File Manager", "recentfiles" to "Recent Files", "backuprestore" to "Backup / Restore", "editor" to "Editor", "reminder" to "Notifikasi", "zip" to "ZIP / UNZIP", "githubzip" to "GitHub ZIP Publisher",
+        "workspace" to "Workspace Center", "plugincenter" to "Plugin Center", "filemanager" to "File Manager", "recentfiles" to "Recent Files", "backuprestore" to "Backup / Restore", "editor" to "Editor", "reminder" to "Notifikasi", "zip" to "ZIP / UNZIP", "githubzip" to "GitHub Folder Publisher",
         "wifi" to "Wi-Fi Info", "json" to "JSON Tools", "hash" to "Hash Generator",
         "base64" to "Base64", "url" to "URL Tools", "regex" to "Regex Tester",
         "uuid" to "UUID Generator", "color" to "Color Tools", "number" to "Kalkulator Lengkap",
@@ -437,6 +442,17 @@ class MainActivity : Activity() {
                 STEGO_ENCODE_PICK -> { stegoImageUri = data.data; toast("Gambar dipilih untuk encode"); return }
                 STEGO_DECODE_PICK -> { stegoImageUri = data.data; decodeStegoFromUri(data.data!!); return }
                 CERT_PICK -> { certFileUri = data.data; viewCertificate(data.data!!); return }
+                GITHUB_FOLDER_PICK_REQUEST -> {
+                    val treeUri = data.data!!
+                    githubFolderUri = treeUri
+                    runCatching {
+                        contentResolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    githubFolderLabel?.text = "Folder: ${DocumentFile.fromTreeUri(this, treeUri)?.name ?: "Folder dipilih"}"
+                    githubUploadStatus?.text = "Membaca isi folder..."
+                    scanGithubFolder(treeUri)
+                    return
+                }
                 GITHUB_ZIP_PICK_REQUEST -> {
                     githubZipUri = data.data
                     githubZipExcluded.clear()
@@ -6448,18 +6464,18 @@ class MainActivity : Activity() {
     // ---------- GITHUB ZIP PUBLISHER ----------
 
     private fun githubZipTool() {
-        clearPage("GitHub ZIP Publisher")
-        addToolHeader("GitHub ZIP Publisher", "Upload seluruh ZIP ke GitHub dengan preview struktur, pemilihan root, dan exclude file/folder.", "github")
+        clearPage("GitHub Folder Publisher")
+        addToolHeader("GitHub Folder Publisher", "Pilih folder project. Semua file dan subfolder akan ditampilkan lalu di-upload langsung ke GitHub.", "github")
 
-        val user = edit("Username GitHub")
-        val repo = edit("Nama repository, contoh: my-project")
+        val user = edit("Username GitHub").apply { setText("username183728") }
+        val repo = edit("Nama repository").apply { setText("B1") }
         val token = edit("GitHub Personal Access Token")
         token.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        val branch = edit("Branch (default: main)").apply { setText("main") }
-        val message = edit("Pesan commit").apply { setText("Upload ZIP via GITLS") }
+        val branch = edit("Branch").apply { setText("main") }
+        val message = edit("Pesan commit").apply { setText("Upload folder via GITLS") }
 
-        githubZipLabel = label("Belum ada ZIP dipilih", 13f)
-        githubUploadStatus = label("Pilih ZIP untuk melihat seluruh isi sebelum upload.", 11f)
+        githubFolderLabel = label("Belum ada folder dipilih", 13f)
+        githubUploadStatus = label("Pilih folder project untuk melihat seluruh isi sebelum upload.", 11f)
         githubUploadStatus?.setTextColor(textMuted)
 
         content.addView(user)
@@ -6467,56 +6483,148 @@ class MainActivity : Activity() {
         content.addView(token)
         content.addView(branch)
         content.addView(message)
-        content.addView(button("Pilih File ZIP") {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                type = "application/zip"
-                addCategory(Intent.CATEGORY_OPENABLE)
-            }, GITHUB_ZIP_PICK_REQUEST)
+        content.addView(button("Pilih Folder Project") {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }, GITHUB_FOLDER_PICK_REQUEST)
         })
-        content.addView(githubZipLabel)
+        content.addView(githubFolderLabel)
         content.addView(githubUploadStatus)
-        content.addView(subLabel("ZIP diekstrak sementara di cache. Kamu dapat memilih folder sebagai root repository dan menghapus file/folder dari upload dengan tombol ×. ZIP asli tidak diubah.", 11f))
-        content.addView(button("Preview / Kelola Isi ZIP") {
-            val uri = githubZipUri
-            if (uri == null) toast("Pilih ZIP terlebih dahulu") else showGithubZipPreview(uri)
+        content.addView(subLabel("Pilih folder utama project (contoh: Tools-main). Semua file di dalam folder dan subfolder akan ikut, kecuali folder .git dan file cache umum.", 11f))
+        content.addView(button("Lihat Isi Folder") {
+            if (githubFolderFiles.isEmpty()) toast("Pilih folder terlebih dahulu") else {
+                val list = githubFolderFiles.joinToString("\n") { it.first }
+                AlertDialog.Builder(this)
+                    .setTitle("Isi folder • ${githubFolderFiles.size} file")
+                    .setMessage(list.take(45000))
+                    .setPositiveButton("Tutup", null)
+                    .show()
+            }
         })
-        content.addView(button("Upload ZIP ke GitHub") {
-            val uri = githubZipUri
+        content.addView(button("Upload Folder ke GitHub") {
+            val treeUri = githubFolderUri
             val owner = user.text.toString().trim()
             val repository = repo.text.toString().trim()
             val pat = token.text.toString().trim()
             val targetBranch = branch.text.toString().trim().ifBlank { "main" }
-            val commitMessage = message.text.toString().trim().ifBlank { "Upload ZIP via GITLS" }
-
-            if (uri == null) { toast("Pilih ZIP terlebih dahulu"); return@button }
+            val commitMessage = message.text.toString().trim().ifBlank { "Upload folder via GITLS" }
+            if (treeUri == null || githubFolderFiles.isEmpty()) { toast("Pilih folder yang berisi file terlebih dahulu"); return@button }
             if (!owner.matches(Regex("[A-Za-z0-9_.-]+"))) { toast("Username GitHub tidak valid"); return@button }
             if (!repository.matches(Regex("[A-Za-z0-9_.-]+"))) { toast("Nama repository tidak valid"); return@button }
             if (pat.isBlank()) { toast("Masukkan GitHub token"); return@button }
             if (!targetBranch.matches(Regex("[A-Za-z0-9._/-]+"))) { toast("Nama branch tidak valid"); return@button }
-
-            val selectedRoot = githubZipRoot
-            val excluded = githubZipExcluded.toSet()
-            if (githubZipPreviewFiles.isEmpty()) { toast("Tunggu analisis ZIP selesai atau pilih ZIP lagi"); return@button }
-
             val status = githubUploadStatus
-            status?.text = "Menyiapkan upload..."
+            status?.text = "Menyiapkan upload folder..."
             thread {
                 val result = runCatching {
-                    uploadZipToGitHub(uri, owner, repository, pat, targetBranch, commitMessage, selectedRoot, excluded) { text ->
+                    uploadFolderToGitHub(treeUri, owner, repository, pat, targetBranch, commitMessage) { text ->
                         runOnUiThread { status?.text = text }
                     }
                 }
                 runOnUiThread {
-                    result.onSuccess { summary ->
-                        status?.text = summary
-                        toast("Upload GitHub selesai")
-                    }.onFailure { e ->
-                        status?.text = "Upload gagal: ${e.message ?: "Unknown error"}"
-                        toast("Upload GitHub gagal")
-                    }
+                    result.onSuccess { summary -> status?.text = summary; toast("Upload GitHub selesai") }
+                        .onFailure { e -> status?.text = "Upload gagal: ${e.message ?: "Unknown error"}"; toast("Upload GitHub gagal") }
                 }
             }
         })
+    }
+
+    private fun scanGithubFolder(treeUri: Uri) {
+        thread {
+            val result = runCatching {
+                val root = DocumentFile.fromTreeUri(this, treeUri) ?: error("Folder tidak dapat dibuka")
+                val found = mutableListOf<Pair<String, DocumentFile>>()
+                fun walk(dir: DocumentFile, prefix: String) {
+                    dir.listFiles().forEach { child ->
+                        val name = child.name ?: return@forEach
+                        if (name == ".git" || name == "__MACOSX" || name == "node_modules" || name == ".gradle" || name == "build" || name == ".DS_Store" || name == "Thumbs.db") return@forEach
+                        val rel = if (prefix.isBlank()) name else "$prefix/$name"
+                        if (child.isDirectory) walk(child, rel) else if (child.isFile) found.add(rel to child)
+                    }
+                }
+                walk(root, "")
+                require(found.isNotEmpty()) { "Folder kosong atau tidak memiliki file yang dapat dibaca" }
+                require(found.size <= 3000) { "Maksimal 3000 file per upload" }
+                found.sortedBy { it.first }
+            }
+            runOnUiThread {
+                result.onSuccess { files ->
+                    githubFolderFiles = files
+                    githubUploadStatus?.text = "Siap: ${files.size} file ditemukan. Tekan Upload Folder ke GitHub."
+                }.onFailure { e ->
+                    githubFolderFiles = emptyList()
+                    githubUploadStatus?.text = "Gagal membaca folder: ${e.message}"
+                }
+            }
+        }
+    }
+
+    private fun uploadFolderToGitHub(
+        treeUri: Uri,
+        owner: String,
+        repo: String,
+        token: String,
+        branch: String,
+        commitMessage: String,
+        progress: (String) -> Unit
+    ): String {
+        val root = DocumentFile.fromTreeUri(this, treeUri) ?: error("Folder tidak dapat dibuka")
+        val files = mutableListOf<Pair<String, DocumentFile>>()
+        fun walk(dir: DocumentFile, prefix: String) {
+            dir.listFiles().forEach { child ->
+                val name = child.name ?: return@forEach
+                if (name == ".git" || name == "__MACOSX" || name == "node_modules" || name == ".gradle" || name == "build" || name == ".DS_Store" || name == "Thumbs.db") return@forEach
+                val rel = if (prefix.isBlank()) name else "$prefix/$name"
+                if (child.isDirectory) walk(child, rel) else if (child.isFile) files.add(rel to child)
+            }
+        }
+        walk(root, "")
+        require(files.isNotEmpty()) { "Folder kosong" }
+        require(files.size <= 3000) { "Maksimal 3000 file per upload" }
+        val base = "https://api.github.com/repos/${Uri.encode(owner)}/${Uri.encode(repo)}"
+        val headers = mapOf("Authorization" to "Bearer $token", "Accept" to "application/vnd.github+json", "X-GitHub-Api-Version" to "2022-11-28", "User-Agent" to "GITLS-Android")
+
+        progress("Memeriksa repository dan branch...")
+        var parentCommit = ""
+        var baseTree = ""
+        val ref = runCatching { githubRequest("GET", "$base/git/ref/heads/${encodePath(branch)}", null, headers) }.getOrNull()
+        if (ref != null) {
+            parentCommit = ref.optJSONObject("object")?.optString("sha").orEmpty()
+            require(parentCommit.isNotBlank()) { "Commit branch tidak ditemukan" }
+            val commit = githubRequest("GET", "$base/git/commits/$parentCommit", null, headers)
+            baseTree = commit.optJSONObject("tree")?.optString("sha").orEmpty()
+        }
+
+        val treeEntries = JSONArray()
+        files.forEachIndexed { index, (path, doc) ->
+            val size = doc.length()
+            require(size <= 90L * 1024L * 1024L) { "File terlalu besar untuk GitHub API: $path" }
+            progress("Upload file ${index + 1}/${files.size}: $path")
+            val bytes = contentResolver.openInputStream(doc.uri)?.use { it.readBytes() } ?: error("Tidak dapat membaca $path")
+            val blob = githubRequest("POST", "$base/git/blobs", JSONObject().put("content", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)).put("encoding", "base64"), headers)
+            val sha = blob.optString("sha")
+            require(sha.isNotBlank()) { "Gagal membuat blob: $path" }
+            treeEntries.put(JSONObject().put("path", path).put("mode", "100644").put("type", "blob").put("sha", sha))
+        }
+        progress("Membuat Git tree...")
+        val treeBody = JSONObject().put("tree", treeEntries)
+        if (baseTree.isNotBlank()) treeBody.put("base_tree", baseTree)
+        val tree = githubRequest("POST", "$base/git/trees", treeBody, headers)
+        val treeSha = tree.optString("sha")
+        require(treeSha.isNotBlank()) { "Gagal membuat Git tree" }
+        progress("Membuat commit...")
+        val parents = JSONArray()
+        if (parentCommit.isNotBlank()) parents.put(parentCommit)
+        val newCommit = githubRequest("POST", "$base/git/commits", JSONObject().put("message", commitMessage).put("tree", treeSha).put("parents", parents), headers)
+        val newSha = newCommit.optString("sha")
+        require(newSha.isNotBlank()) { "Gagal membuat commit" }
+        progress("Mengirim commit ke GitHub...")
+        if (parentCommit.isBlank()) {
+            githubRequest("POST", "$base/git/refs", JSONObject().put("ref", "refs/heads/$branch").put("sha", newSha), headers)
+        } else {
+            githubRequest("PATCH", "$base/git/refs/heads/${encodePath(branch)}", JSONObject().put("sha", newSha).put("force", false), headers)
+        }
+        return "Berhasil: ${files.size} file di-upload ke $owner/$repo ($branch). Token tidak disimpan."
     }
 
     private data class GithubZipAnalysis(
@@ -6652,7 +6760,7 @@ class MainActivity : Activity() {
             val label = TextView(this).apply {
                 text = if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) "⊘ $path" else "• $path"
                 textSize = 12f
-                setTextColor(if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) textMuted else textPrimary)
+                setTextColor(if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) textMuted else textMain)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
             val remove = TextView(this).apply {
@@ -6664,7 +6772,7 @@ class MainActivity : Activity() {
             remove.setOnClickListener {
                 if (githubZipExcluded.contains(path)) githubZipExcluded.remove(path) else githubZipExcluded.add(path)
                 label.text = if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) "⊘ $path" else "• $path"
-                label.setTextColor(if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) textMuted else textPrimary)
+                label.setTextColor(if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) textMuted else textMain)
                 remove.text = if (githubZipExcluded.contains(path)) "✓" else "×"
                 githubZipUploadSummary()
             }

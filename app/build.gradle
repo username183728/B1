@@ -34,6 +34,7 @@ android {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation 'androidx.core:core:1.16.0'
+    implementation 'androidx.documentfile:documentfile:1.0.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.zxing:core:3.5.3'
     implementation 'com.google.mlkit:text-recognition:16.0.1'
