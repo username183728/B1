@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    GITLS intentionally supports ESP32/local-device tools that expose HTTP-only
+    endpoints on a private Wi-Fi network. Keep this policy limited to this app.
+    Do not send passwords or sensitive credentials over plain HTTP.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
