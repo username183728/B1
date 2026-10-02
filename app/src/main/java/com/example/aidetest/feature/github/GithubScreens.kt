@@ -673,7 +673,7 @@ internal fun MainActivity.ghRunDeleteAll(token: String, prefix: String, onDone: 
     val poll = object : Runnable {
         override fun run() {
             if (isFinishing || isDestroyed) return
-            val prefsState = getSharedPreferences("gh_delete_state", MODE_PRIVATE)
+            val prefsState = getSharedPreferences("gh_delete_state", Context.MODE_PRIVATE)
             val activeId = prefsState.getString("job_id", "")
             val myId = intentJobId(token, prefix)
             if (activeId == myId) {

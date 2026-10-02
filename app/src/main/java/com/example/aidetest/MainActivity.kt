@@ -10439,7 +10439,7 @@ class MainActivity : Activity() {
         wrapper.addView(label, FrameLayout.LayoutParams(dp(48), dp(52), Gravity.CENTER_VERTICAL or Gravity.END))
         wrapper.setOnClickListener {
             playBitThinking()
-            postDelayed({ showBitChat() }, 120L)
+            wrapper.postDelayed({ showBitChat() }, 120L)
         }
         addPressFeedback(wrapper)
         bitProcessErrorView = wrapper
