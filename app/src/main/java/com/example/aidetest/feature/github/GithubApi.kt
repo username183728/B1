@@ -2,10 +2,11 @@ package com.example.aidetest
 
 import android.content.*
 import android.net.Uri
-import com.example.aidetest.MainActivity.GhCancelException
-import com.example.aidetest.MainActivity.GhProgress
-import com.example.aidetest.MainActivity.GhResult
-import com.example.aidetest.MainActivity.GithubZipAnalysis
+import android.util.Base64
+import com.example.aidetest.GhCancelException
+import com.example.aidetest.GhProgress
+import com.example.aidetest.GhResult
+import com.example.aidetest.GithubZipAnalysis
 import java.io.*
 import java.net.*
 import java.nio.charset.StandardCharsets
@@ -53,6 +54,49 @@ internal fun MainActivity.ghDeleteError(e: Throwable): String {
 
 internal fun MainActivity.intentJobId(token: String, prefix: String): String =
     "${ghUserValue}/${ghRepoValue}/${ghBranch}/${prefix.trim('/')}"
+
+/**
+ * Upload satu file dari Bit Chat melalui GitHub Contents API.
+ * Dipakai hanya setelah pengguna memilih file dan secara eksplisit memberi perintah upload.
+ */
+internal fun MainActivity.ghUploadSingleFileToGithub(uri: Uri, path: String, token: String) {
+    val clean = path.trim('/').replace(Regex("/{2,}"), "/")
+    require(clean.isNotBlank()) { "Path file kosong" }
+
+    val bytes = contentResolver.openInputStream(uri)?.use { input ->
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val n = input.read(buffer)
+            if (n < 0) break
+            total += n
+            if (total > 10L * 1024L * 1024L) {
+                throw IOException("File terlalu besar untuk upload langsung dari chat (maksimal 10 MB). Gunakan GitHub Publisher untuk file besar.")
+            }
+            out.write(buffer, 0, n)
+        }
+        out.toByteArray()
+    } ?: throw IOException("File tidak dapat dibaca")
+
+    require(bytes.isNotEmpty()) { "File kosong atau tidak dapat dibaca" }
+
+    val base = "https://api.github.com/repos/${Uri.encode(ghUserValue)}/${Uri.encode(ghRepoValue)}"
+    val url = "$base/contents/${encodePath(clean)}"
+    val existingSha = runCatching {
+        val info = JSONObject(githubRequestRaw("$url?ref=${Uri.encode(ghBranch)}", token))
+        info.optString("sha").takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
+    val body = JSONObject()
+        .put("message", "Upload $clean via GITLS Bit")
+        .put("content", encoded)
+        .put("branch", ghBranch)
+    existingSha?.let { body.put("sha", it) }
+
+    githubRequestRetry("PUT", url, body, ghHeaders(token))
+}
 
 internal fun MainActivity.ghDeleteSingleFile(path: String, token: String) {
     val clean = path.trim('/')

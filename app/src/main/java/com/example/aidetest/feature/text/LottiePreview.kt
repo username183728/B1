@@ -183,6 +183,9 @@ fun MainActivity.showLottiePreview(json: String) {
     fun onLoaded(comp: LottieComposition) {
         if (isFinishing || currentPage != "Lottie Preview") return
         durationSec = comp.duration / 1000f
+        // LottieFiles/Bodymovin JSON dapat memiliki durasi sangat pendek atau 0
+        // pada metadata tertentu; tetap biarkan preview berjalan tanpa seek error.
+        seek.max = 1000
         val b = comp.bounds
         val name = runCatching { JSONObject(json).optString("nm") }.getOrDefault("").ifBlank { "Tanpa nama" }
         val layers = runCatching { JSONObject(json).optJSONArray("layers")?.length() ?: 0 }.getOrDefault(0)
@@ -195,6 +198,7 @@ fun MainActivity.showLottiePreview(json: String) {
         anim.setComposition(comp)
         seek.isEnabled = true
         anim.speed = speeds[speedIndex]
+        anim.repeatCount = if (loop) LottieDrawable.INFINITE else 0
         anim.playAnimation()
         appendEditorConsole("Lottie dimuat: ${b.width()}x${b.height()}, ${"%.2f".format(Locale.US, durationSec)}s")
     }

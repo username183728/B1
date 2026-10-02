@@ -61,6 +61,25 @@ if bad:
 print("XML validation: OK")
 PY
 
+# Guard: `::lateinitProp.isInitialized` hanya valid di class pemilik properti.
+# Di file extension (MainActivity.xxx) ini bikin error kompilasi "Backing field ... is not accessible".
+# Gunakan accessor aman seperti `bitAnim` (lihat MainActivity.kt).
+python3 - <<'PY'
+import pathlib, re, sys
+bad = []
+for p in pathlib.Path("app/src/main/java").rglob("*.kt"):
+    if p.name == "MainActivity.kt":
+        continue
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+        if re.search(r"::\w+\.isInitialized", line):
+            bad.append((str(p), i))
+for f, i in bad:
+    print(f"::error file={f},line={i}::::prop.isInitialized dipakai di luar class pemilik (pakai accessor aman di MainActivity)")
+if bad:
+    sys.exit(1)
+print("lateinit guard: OK")
+PY
+
 # Verify application id and version are present.
 grep -q 'applicationId "com.gitls.app"' app/build.gradle
 grep -q 'versionName' app/build.gradle

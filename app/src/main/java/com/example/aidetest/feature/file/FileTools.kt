@@ -938,7 +938,7 @@ internal fun MainActivity.renderConvHome() {
         searchBox.addTextChangedListener(SimpleTextWatcher { renderList(it) })
     }
 
-internal fun MainActivity.convCategoryCard(c: MainActivity.ConvCategory): LinearLayout = LinearLayout(this).apply {
+internal fun MainActivity.convCategoryCard(c: ConvCategory): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(14), dp(12), dp(14), dp(12))
@@ -959,7 +959,7 @@ internal fun MainActivity.convCategoryCard(c: MainActivity.ConvCategory): Linear
         addView(TextView(hostActivity).apply { text = "›"; textSize = 22f; setTextColor(textMuted) })
     }
 
-internal fun MainActivity.renderConvForm(cat: MainActivity.ConvCategory) {
+internal fun MainActivity.renderConvForm(cat: ConvCategory) {
         content.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
             background = bg(panel2, 16)
@@ -982,7 +982,7 @@ internal fun MainActivity.renderConvForm(cat: MainActivity.ConvCategory) {
         content.addView(convPrimaryButton("Mulai Konversi", canStart) { startConversion(cat) })
     }
 
-internal fun MainActivity.convFileBox(cat: MainActivity.ConvCategory): LinearLayout = LinearLayout(this).apply {
+internal fun MainActivity.convFileBox(cat: ConvCategory): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
         setPadding(dp(18), dp(20), dp(18), dp(20))
@@ -1010,7 +1010,7 @@ internal fun MainActivity.convStaticRow(text: String): LinearLayout = LinearLayo
         addView(label(text, 13f).apply { setTextColor(textMuted) }, LinearLayout.LayoutParams(0, -2, 1f))
     }
 
-internal fun MainActivity.convToDropdownRow(cat: MainActivity.ConvCategory): LinearLayout = LinearLayout(this).apply {
+internal fun MainActivity.convToDropdownRow(cat: ConvCategory): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(14), dp(12), dp(14), dp(12))
@@ -1026,7 +1026,7 @@ internal fun MainActivity.convToDropdownRow(cat: MainActivity.ConvCategory): Lin
         })
     }
 
-internal fun MainActivity.convToOptionsBox(cat: MainActivity.ConvCategory): LinearLayout = LinearLayout(this).apply {
+internal fun MainActivity.convToOptionsBox(cat: ConvCategory): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(4), dp(4), dp(4), dp(4))
         background = bg(panel2, 14, line)
@@ -1063,7 +1063,7 @@ internal fun MainActivity.convPrimaryButton(text: String, enabled: Boolean, onCl
         layoutParams = LinearLayout.LayoutParams(-1, dp(54)).apply { topMargin = dp(6) }
     }
 
-internal fun MainActivity.renderConvPickFile(cat: MainActivity.ConvCategory) {
+internal fun MainActivity.renderConvPickFile(cat: ConvCategory) {
         content.addView(label("Pilih File", 20f, true).apply { setPadding(dp(2), 0, dp(2), dp(2)) })
         content.addView(subLabel("Pilih file dari penyimpanan.", 12f).apply { setPadding(dp(2), 0, dp(2), dp(14)) })
         val stat = runCatching {
@@ -1099,7 +1099,7 @@ internal fun MainActivity.renderConvPickFile(cat: MainActivity.ConvCategory) {
         }
     }
 
-internal fun MainActivity.renderConvProgress(cat: MainActivity.ConvCategory) {
+internal fun MainActivity.renderConvProgress(cat: ConvCategory) {
         content.addView(ProgressBar(this).apply {
             isIndeterminate = true
         }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(24); bottomMargin = dp(16) })
@@ -1131,7 +1131,7 @@ internal fun MainActivity.renderConvProgress(cat: MainActivity.ConvCategory) {
         }
     }
 
-internal fun MainActivity.renderConvDone(cat: MainActivity.ConvCategory) {
+internal fun MainActivity.renderConvDone(cat: ConvCategory) {
         content.addView(TextView(this).apply {
             text = "✓"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
             background = bg(Color.rgb(17, 17, 19), 40)
@@ -1174,7 +1174,7 @@ internal fun MainActivity.renderConvDone(cat: MainActivity.ConvCategory) {
         })
     }
 
-internal fun MainActivity.pickConvFile(cat: MainActivity.ConvCategory) {
+internal fun MainActivity.pickConvFile(cat: ConvCategory) {
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             type = cat.mime; addCategory(Intent.CATEGORY_OPENABLE)
         }, 1050)
@@ -1260,7 +1260,7 @@ internal fun MainActivity.writeBitmapAsBmp(bitmap: Bitmap, outFile: File) {
         }
     }
 
-internal fun MainActivity.startConversion(cat: MainActivity.ConvCategory) {
+internal fun MainActivity.startConversion(cat: ConvCategory) {
         val srcUri = convPickedUri ?: return
         val srcName = convPickedName ?: "file"
         val targetFormat = convToFormat ?: return

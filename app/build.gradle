@@ -52,11 +52,10 @@ android {
             }
         }
         release {
-            // R8 aktif untuk menghapus kode library yang tidak terpakai dan resource tak terpakai.
-            // Seluruh kelas aplikasi (com.example.aidetest.**) dijaga utuh lewat proguard-rules.pro
-            // karena app memakai refleksi pada beberapa tool opsional, dan nama tidak diobfuscate
-            // agar stack trace tetap terbaca. Jika ada crash khusus release, ubah ke false untuk
-            // membandingkan dengan build tanpa shrink.
+            // R8 aktif untuk menghapus bytecode/resource yang benar-benar tidak digunakan.
+            // Jangan blanket-keep seluruh package aplikasi: fitur tetap dilindungi oleh
+            // referensi kode/manifest dan aturan minimum di proguard-rules.pro.
+            // SourceFile/LineNumberTable tetap dipertahankan agar stack trace release terbaca.
             minifyEnabled true
             shrinkResources true
             if (System.getenv("ANDROID_KEYSTORE_PATH")) {

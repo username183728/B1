@@ -16,11 +16,11 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
-import com.example.aidetest.MainActivity.GhActionJob
-import com.example.aidetest.MainActivity.GhCancelException
-import com.example.aidetest.MainActivity.GhField
-import com.example.aidetest.MainActivity.GhProgress
-import com.example.aidetest.MainActivity.GhResult
+import com.example.aidetest.GhActionJob
+import com.example.aidetest.GhCancelException
+import com.example.aidetest.GhField
+import com.example.aidetest.GhProgress
+import com.example.aidetest.GhResult
 import java.io.*
 import java.net.*
 import java.nio.charset.StandardCharsets
@@ -220,6 +220,13 @@ internal fun MainActivity.ghSectionTitle(text: String): TextView =
 internal fun MainActivity.ghShow(screen: View, titleText: String) {
     val stage = ghStage ?: return
     title.text = titleText
+
+    // Layar proses memakai Bit animated di kanan atas, seperti Proses Upload.
+    // Tombol ⋮ disembunyikan agar tidak muncul bersamaan dengan wajah Bit.
+    val processScreen = titleText == "Proses Upload" || titleText == "GitHub Actions" || titleText == "Cek Actions"
+    action.visibility = if (processScreen) View.GONE else View.VISIBLE
+    if (processScreen) editorMore.visibility = View.GONE
+
     stage.removeAllViews()
     stage.addView(screen, FrameLayout.LayoutParams(-1, -2))
     screen.alpha = 0f
@@ -862,10 +869,10 @@ internal fun MainActivity.ghBitProcessAssistant(): FrameLayout {
     }
 
     val face = LottieAnimationView(this).apply {
-        setAnimation("bit_face_v5.json")
+        setAnimation("bit_idle.json")
         repeatMode = LottieDrawable.RESTART
         repeatCount = LottieDrawable.INFINITE
-        setMinAndMaxFrame(0, 108)
+        setMinAndMaxFrame(0, 450)
         scaleType = ImageView.ScaleType.CENTER_INSIDE
         isClickable = false
         isFocusable = false
@@ -874,11 +881,10 @@ internal fun MainActivity.ghBitProcessAssistant(): FrameLayout {
     bitProcessFace = face
     host.addView(face, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.CENTER))
     applyBitFaceTheme(face)
-    face.post { runCatching { face.playAnimation() }.logFailure("gh.faceAnimation") }
+    bitAnim?.attach(face)
 
     host.setOnClickListener {
-        playBitThinking()
-        host.postDelayed({ showBitChat() }, 120L)
+        bitAnim?.onTap(face, openChat = true)
     }
     addPressFeedback(host)
     return host
@@ -1065,6 +1071,7 @@ internal fun MainActivity.ghStartUpload(kind: String, owner: String, repo: Strin
     for (i in 0..4) ghStepLast[i] = null
     bitPendingChatMessage = null
     bitProcessErrorView = null
+    bitAnim?.detach(bitProcessFace)
     bitProcessFace = null
     ghShow(ghProgressScreen(kind, owner, repo, branch), "Proses Upload")
     BitRuntimeContext.onProcessStart("Proses Upload", "Upload $kind ke GitHub")
@@ -1250,12 +1257,7 @@ internal fun MainActivity.ghShowFailure(error: Throwable) {
 internal fun MainActivity.ghShowResult(result: GhResult) {
     if (ghStage?.isAttachedToWindow != true) return
     bitProcessErrorView?.let { it.animate().cancel(); it.visibility = View.GONE }
-    bitProcessFace?.let {
-        it.cancelAnimation()
-        it.setMinAndMaxFrame(0, 108)
-        it.repeatCount = LottieDrawable.INFINITE
-        it.playAnimation()
-    }
+    bitAnim?.playRecovered()
     ghLastResult = result
     val elapsed = if (ghFinishedSec >= 0) ghFinishedSec else ((SystemClock.elapsedRealtime() - ghStartedAt) / 1000L).toInt()
     val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(2), dp(2), dp(2), dp(10)) }
@@ -1334,34 +1336,138 @@ internal fun MainActivity.ghShowResult(result: GhResult) {
 // =====================================================================
 internal fun MainActivity.ghShowActionsScreen(result: GhResult) {
     ghActionPoll?.removeCallbacksAndMessages(null)
+
+    // ================================================================
+    // Tampilan dibuat mengikuti "Proses Upload":
+    // header kecil + Bit animasi di kanan atas, ring besar, target,
+    // lalu timeline dengan StepStateView yang sama (loading/check/error).
+    // ================================================================
     val screen = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(4), dp(10), dp(4), dp(24))
+        setPadding(dp(2), dp(2), dp(2), dp(24))
     }
-    val header = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(16), dp(14), dp(16), dp(14))
-        background = ghRound(ghSoft, 18)
-    }
-    header.addView(ghText("GitHub Actions", 18f, ghInk, true))
-    header.addView(ghText("GITLS hanya menampilkan urutan proses dan status. Baris kode/log panjang tidak ditampilkan.", 11.5f, ghMuted).apply { setPadding(0, dp(5), 0, 0); setLineSpacing(0f, 1.1f) })
-    screen.addView(header, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
-    val target = ghText("${result.owner}/${result.repo} • ${result.branch}", 12f, ghMuted, true)
-    screen.addView(target, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(4); rightMargin = dp(4); bottomMargin = dp(10) })
-    val host = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-    screen.addView(host, LinearLayout.LayoutParams(-1, 0, 1f))
-    screen.addView(ghOutlineButton("Buka Actions di GitHub", "open-in-new") { ghOpenUrl("${result.url}/actions") })
-    screen.addView(ghOutlineButton("Kembali", "arrow-left") { ghShowResult(result) })
-    ghShow(screen, "Cek Actions")
 
-    // Status memakai StepStateView yang sama dengan layar Proses Upload:
-    // pending = cincin abu-abu, running = cincin hitam berputar, selesai = lingkaran hitam + centang
-    // yang digambar, gagal = lingkaran merah + silang.
-    // View dipakai ulang antar polling supaya putaran tidak reset dan animasi centang hanya
-    // diputar saat status benar-benar berubah (bukan setiap 3 detik).
+    val processHeader = FrameLayout(this).apply {
+        clipChildren = false
+        clipToPadding = false
+    }
+    val processBit = ghBitProcessAssistant()
+    processHeader.addView(
+        processBit,
+        FrameLayout.LayoutParams(dp(104), dp(58), Gravity.TOP or Gravity.END)
+    )
+    screen.addView(processHeader, LinearLayout.LayoutParams(-1, dp(58)))
+
+    val ringBox = FrameLayout(this)
+    val ring = ProgressRingView(this).apply {
+        ringColor = ghInk
+        trackColor = ghSoft
+        indeterminate = true
+    }
+    val percent = ghText("0%", 28f, ghInk, true).apply {
+        gravity = Gravity.CENTER
+        textAlignment = View.TEXT_ALIGNMENT_CENTER
+    }
+    val center = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+    }
+    center.addView(
+        ghLogo(54, ghInk),
+        LinearLayout.LayoutParams(dp(54), dp(54)).apply {
+            bottomMargin = dp(8)
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+    )
+    center.addView(percent, LinearLayout.LayoutParams(-2, -2).apply {
+        gravity = Gravity.CENTER_HORIZONTAL
+    })
+    ringBox.addView(ring, FrameLayout.LayoutParams(-1, -1))
+    ringBox.addView(center, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+    screen.addView(
+        ringBox,
+        LinearLayout.LayoutParams(dp(210), dp(210)).apply {
+            topMargin = dp(6)
+            bottomMargin = dp(14)
+        }
+    )
+
+    val target = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(12), dp(7), dp(12), dp(7))
+        background = ghRound(ghSoft, 14)
+    }
+    target.addView(
+        ghIcon("source-repository", 15f, ghMuted),
+        LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(6) }
+    )
+    target.addView(
+        ghText("${result.owner}/${result.repo}", 12.5f, ghInk, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }
+    )
+    target.addView(
+        ghIcon("source-branch", 15f, ghMuted),
+        LinearLayout.LayoutParams(dp(18), dp(18)).apply {
+            leftMargin = dp(12)
+            rightMargin = dp(4)
+        }
+    )
+    target.addView(ghText(result.branch, 12.5f, ghMuted))
+    screen.addView(target, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(18) })
+
+    val host = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(6), 0, dp(6), 0)
+    }
+    screen.addView(host, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
+
+    val note = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        background = ghRound(ghSoft, 16)
+    }
+    val noteSpinner = StepStateView(this).apply {
+        inkColor = ghInk
+        onInkColor = ghOnInk
+        mutedColor = ghStroke
+        dangerColor = ghDanger
+        setState(StepStateView.ACTIVE, false)
+    }
+    note.addView(noteSpinner, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(12) })
+    val noteTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    val noteTitle = ghText("Actions sedang berjalan…", 12.5f, ghMuted).apply {
+        setLineSpacing(0f, 1.1f)
+    }
+    val noteDetail = ghText("Memperbarui status otomatis…", 11.5f, ghMuted).apply {
+        setPadding(0, dp(4), 0, 0)
+    }
+    noteTexts.addView(noteTitle)
+    noteTexts.addView(noteDetail)
+    note.addView(noteTexts, LinearLayout.LayoutParams(0, -2, 1f))
+    screen.addView(note, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+    screen.addView(
+        ghOutlineButton("Buka Actions di GitHub", "open-in-new") {
+            ghOpenUrl("${result.url}/actions")
+        }
+    )
+    screen.addView(
+        ghOutlineButton("Kembali", "arrow-left") {
+            ghShowResult(result)
+        }
+    )
+
+    ghShow(screen, "GitHub Actions")
+
+    // Status view dipakai ulang antar polling agar spinner tetap hidup dan
+    // centang hanya melakukan pop/garis saat state benar-benar berubah.
     val stateViews = HashMap<String, StepStateView>()
 
-    fun stateOf(c: String?): Int = when (c) {
+    fun stateOf(statusOrConclusion: String?): Int = when (statusOrConclusion) {
         "success", "completed", "neutral" -> StepStateView.DONE
         "failure", "cancelled", "timed_out", "startup_failure" -> StepStateView.FAILED
         "in_progress" -> StepStateView.ACTIVE
@@ -1370,89 +1476,195 @@ internal fun MainActivity.ghShowActionsScreen(result: GhResult) {
 
     fun stateView(key: String, state: Int): StepStateView {
         val existing = stateViews[key]
-        val v = existing ?: StepStateView(this).apply {
-            inkColor = ghInk; onInkColor = ghOnInk; mutedColor = ghStroke; dangerColor = ghDanger
+        val view = existing ?: StepStateView(this).apply {
+            inkColor = ghInk
+            onInkColor = ghOnInk
+            mutedColor = ghStroke
+            dangerColor = ghDanger
             stateViews[key] = this
         }
-        (v.parent as? ViewGroup)?.removeView(v)
-        // View baru langsung tampil di status akhirnya; hanya perubahan status yang dianimasikan.
-        v.setState(state, existing != null)
-        return v
+        (view.parent as? ViewGroup)?.removeView(view)
+        view.setState(state, existing != null)
+        return view
     }
 
-    fun runningStatusRow(message: String, bottomDp: Int = 12): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), dp(4), dp(4), dp(bottomDp))
-            addView(stateView("run-status", StepStateView.ACTIVE), LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(10) })
-            addView(ghText(message, 12f, ghInk, true).apply {
-                setLineSpacing(0f, 1.05f)
-            })
-        }
+    fun doneState(value: String?): Boolean = when (value) {
+        "success", "completed", "neutral" -> true
+        else -> false
     }
 
-    fun stepRow(jobId: Long, index: Int, name: String, conclusion: String?): LinearLayout {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, dp(3))
-        }
-        if (conclusion == "skipped") {
-            row.addView(ghText("–", 12f, ghMuted, true).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(10) })
-            row.addView(ghText(name, 11.5f, ghMuted))
-            return row
-        }
-        val st = stateOf(conclusion)
-        row.addView(stateView("$jobId#$index", st), LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(10) })
-        row.addView(ghText(name, 11.5f, if (st == StepStateView.PENDING) ghMuted else ghInk).apply {
-            if (st == StepStateView.ACTIVE) setTypeface(null, android.graphics.Typeface.BOLD)
-        })
-        return row
-    }
-
-    fun render(message: String, jobs: List<GhActionJob> = emptyList(), runUrl: String = "", running: Boolean = true) {
+    fun render(
+        message: String,
+        jobs: List<GhActionJob> = emptyList(),
+        runUrl: String = "",
+        running: Boolean = true,
+        runFound: Boolean = false
+    ) {
         host.removeAllViews()
-        if (running) {
-            host.addView(runningStatusRow(message))
-        } else {
-            host.addView(ghText(message, 12f, ghMuted).apply { setPadding(dp(4), dp(4), dp(4), dp(12)) })
+
+        val allSteps = jobs.flatMap { job -> job.steps.map { it.second } }
+            .filter { it != "skipped" }
+        val completedSteps = allSteps.count(::doneState)
+        val hasActiveStep = allSteps.any { it == "in_progress" }
+        val failed = jobs.any { job ->
+            job.conclusion in listOf("failure", "cancelled", "timed_out", "startup_failure") ||
+                job.steps.any { it.second in listOf("failure", "cancelled", "timed_out", "startup_failure") }
         }
-        if (runUrl.isNotBlank()) host.addView(ghText("Run ditemukan", 13f, ghInk, true).apply { setPadding(dp(4), 0, dp(4), dp(8)) })
+        val calculatedPercent = when {
+            !runFound -> 0
+            !running -> 100
+            allSteps.isNotEmpty() -> ((completedSteps * 100f) / allSteps.size)
+                .roundToInt().coerceIn(0, 98)
+            hasActiveStep -> 8
+            jobs.isNotEmpty() -> 6
+            else -> 0
+        }
+
+        if (!runFound) {
+            ring.indeterminate = true
+        } else {
+            ring.indeterminate = false
+            ring.ringColor = if (failed && !running) ghDanger else ghInk
+            ring.setProgress(calculatedPercent.toFloat())
+        }
+        percent.text = "$calculatedPercent%"
+        noteTitle.text = when {
+            failed && !running -> "Actions gagal."
+            !running -> "Actions selesai."
+            else -> message.ifBlank { "Actions sedang berjalan…" }
+        }
+        noteDetail.text = when {
+            !runFound -> "Menunggu GitHub membuat workflow run…"
+            runUrl.isNotBlank() && running -> "Run ditemukan • status diperbarui otomatis"
+            !running -> "Pemeriksaan workflow selesai"
+            else -> "Menunggu langkah berikutnya…"
+        }
+        noteSpinner.setState(
+            when {
+                failed && !running -> StepStateView.FAILED
+                !running -> StepStateView.DONE
+                else -> StepStateView.ACTIVE
+            },
+            true
+        )
+
+        if (runUrl.isNotBlank()) {
+            host.addView(
+                ghText("Run ditemukan", 13f, ghInk, true).apply {
+                    setPadding(dp(4), 0, dp(4), dp(8))
+                }
+            )
+        }
+
         jobs.forEach { job ->
-            val row = LinearLayout(this).apply {
+            val jobState = job.conclusion?.let(::stateOf) ?: stateOf(job.status)
+            val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), dp(12), dp(14), dp(12))
                 background = ghRound(ghCard, 15, ghStroke)
             }
-            val jobState = job.conclusion?.let { stateOf(it) }
-                ?: if (job.status == "in_progress") StepStateView.ACTIVE else StepStateView.PENDING
+
             val titleRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            titleRow.addView(stateView("job-${job.id}", jobState), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(10) })
+            titleRow.addView(
+                stateView("job-${job.id}", jobState),
+                LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(10) }
+            )
             titleRow.addView(ghText(job.name, 14f, ghInk, true))
-            row.addView(titleRow)
+            card.addView(titleRow)
+
             if (job.steps.isEmpty()) {
-                row.addView(ghText(job.status, 11.5f, ghMuted).apply { setPadding(dp(0), dp(6), dp(0), dp(0)) })
+                card.addView(
+                    ghText(job.status.ifBlank { "Menunggu…" }, 11.5f, ghMuted).apply {
+                        setPadding(0, dp(7), 0, 0)
+                    }
+                )
             } else {
-                val stepBox = LinearLayout(this).apply {
+                val timeline = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(0, dp(6), 0, 0)
                 }
-                job.steps.forEachIndexed { idx, (n, c) -> stepBox.addView(stepRow(job.id, idx, n, c)) }
-                row.addView(stepBox)
+                job.steps.forEachIndexed { index, pair ->
+                    val name = pair.first
+                    val status = pair.second
+                    val row = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(0, dp(5), 0, dp(5))
+                    }
+                    if (status == "skipped") {
+                        row.addView(
+                            ghText("–", 12f, ghMuted, true).apply { gravity = Gravity.CENTER },
+                            LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(10) }
+                        )
+                        row.addView(ghText(name, 11.5f, ghMuted))
+                    } else {
+                        val stepState = stateOf(status)
+                        row.addView(
+                            stateView("${job.id}#$index", stepState),
+                            LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(10) }
+                        )
+                        row.addView(
+                            ghText(name, 11.5f, if (stepState == StepStateView.PENDING) ghMuted else ghInk).apply {
+                                if (stepState == StepStateView.ACTIVE) setTypeface(null, android.graphics.Typeface.BOLD)
+                                maxLines = 2
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            }
+                        )
+                    }
+                    timeline.addView(row)
+                    if (index < job.steps.lastIndex) {
+                        timeline.addView(
+                            View(this).apply {
+                                setBackgroundColor(ghStroke)
+                                alpha = 0.72f
+                            },
+                            LinearLayout.LayoutParams(dp(2), dp(8)).apply {
+                                leftMargin = dp(9)
+                                topMargin = dp(-3)
+                                bottomMargin = dp(-3)
+                            }
+                        )
+                    }
+                }
+                card.addView(timeline)
             }
+
             if (job.conclusion == "failure" || job.conclusion == "cancelled") {
                 ghActionLastFailedJob = job
-                row.addView(ghOutlineButton("Salin kesalahan", "content-copy") { ghCopy("GitHub Actions", "${job.name}\nStatus: ${job.conclusion}\n" + job.steps.joinToString("\n") { "${it.first}: ${it.second ?: ""}" }); toast("Ringkasan disalin") }.apply { setPadding(0, dp(8), 0, 0) })
-                row.addView(ghOutlineButton("Download log gagal", "download") { ghDownloadActionLog(result, job) }.apply { setPadding(0, dp(4), 0, 0) })
+                card.addView(
+                    ghOutlineButton("Salin kesalahan", "content-copy") {
+                        ghCopy(
+                            "GitHub Actions",
+                            "${job.name}\nStatus: ${job.conclusion}\n" +
+                                job.steps.joinToString("\n") { "${it.first}: ${it.second ?: ""}" }
+                        )
+                        toast("Ringkasan disalin")
+                    }.apply { setPadding(0, dp(8), 0, 0) }
+                )
+                card.addView(
+                    ghOutlineButton("Download log gagal", "download") {
+                        ghDownloadActionLog(result, job)
+                    }.apply { setPadding(0, dp(4), 0, 0) }
+                )
             }
-            host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+            host.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
-        if (!running && jobs.any { it.conclusion == "failure" || it.conclusion == "cancelled" }) {
-            host.addView(ghText("Actions gagal. Periksa langkah bertanda ✕. Kamu bisa menyalin ringkasannya atau mengunduh log untuk pemeriksaan lebih lanjut.", 12f, ghMuted).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); setLineSpacing(0f, 1.1f) })
+
+        if (!running && failed) {
+            host.addView(
+                ghText(
+                    "Actions gagal. Periksa langkah bertanda silang. Kamu bisa menyalin ringkasan atau mengunduh log untuk pemeriksaan lebih lanjut.",
+                    12f,
+                    ghMuted
+                ).apply {
+                    setPadding(dp(4), dp(8), dp(4), dp(8))
+                    setLineSpacing(0f, 1.1f)
+                }
+            )
         }
     }
 
@@ -1461,38 +1673,72 @@ internal fun MainActivity.ghShowActionsScreen(result: GhResult) {
             try {
                 val headers = ghHeaders(ghTokenValue)
                 val base = "https://api.github.com/repos/${Uri.encode(result.owner)}/${Uri.encode(result.repo)}"
-                val runs = githubRequestRetry("GET", "$base/actions/runs?branch=${Uri.encode(result.branch)}&per_page=10", null, headers)
+                val runs = githubRequestRetry(
+                    "GET",
+                    "$base/actions/runs?branch=${Uri.encode(result.branch)}&per_page=10",
+                    null,
+                    headers
+                )
                 val arr = runs.optJSONArray("workflow_runs") ?: JSONArray()
                 var run: JSONObject? = null
                 for (i in 0 until arr.length()) {
                     val candidate = arr.optJSONObject(i) ?: continue
-                    if (candidate.optString("head_sha") == result.commitSha) { run = candidate; break }
+                    if (candidate.optString("head_sha") == result.commitSha) {
+                        run = candidate
+                        break
+                    }
                 }
                 if (run == null) {
-                    runOnUiThread { render("Workflow terdeteksi, tetapi GitHub belum membuat run. Menunggu…") }
+                    runOnUiThread { render("Actions sedang berjalan…", runFound = false) }
                     ghActionPoll?.postDelayed(ghActionRunnable!!, 3000L)
                     return@thread
                 }
+
                 val currentRun = run
                 val runId = currentRun.optLong("id")
                 val runUrl = currentRun.optString("html_url")
-                val jobsJson = githubRequestRetry("GET", "$base/actions/runs/$runId/jobs?per_page=100", null, headers)
+                val jobsJson = githubRequestRetry(
+                    "GET",
+                    "$base/actions/runs/$runId/jobs?per_page=100",
+                    null,
+                    headers
+                )
                 val jobsArr = jobsJson.optJSONArray("jobs") ?: JSONArray()
                 val jobs = mutableListOf<GhActionJob>()
                 for (i in 0 until jobsArr.length()) {
                     val j = jobsArr.optJSONObject(i) ?: continue
                     val stepsArr = j.optJSONArray("steps") ?: JSONArray()
-                    val steps = mutableListOf<Pair<String,String?>>()
+                    val steps = mutableListOf<Pair<String, String?>>()
                     for (k in 0 until stepsArr.length()) {
                         val st = stepsArr.optJSONObject(k) ?: continue
-                        // Selesai -> conclusion; belum selesai -> status ("in_progress" / "pending").
-                        steps += st.optString("name") to st.optString("conclusion").ifBlank { st.optString("status").ifBlank { null } }
+                        steps += st.optString("name") to st.optString("conclusion")
+                            .ifBlank { st.optString("status").ifBlank { null } }
                     }
-                    jobs += GhActionJob(j.optLong("id"), j.optString("name", "Job"), j.optString("status"), j.optString("conclusion").ifBlank { null }, steps, j.optString("html_url"))
+                    jobs += GhActionJob(
+                        j.optLong("id"),
+                        j.optString("name", "Job"),
+                        j.optString("status"),
+                        j.optString("conclusion").ifBlank { null },
+                        steps,
+                        j.optString("html_url")
+                    )
                 }
+
                 val completed = currentRun.optString("status") == "completed"
-                runOnUiThread { render(if (completed) "Actions selesai." else "Actions sedang berjalan…", jobs, runUrl, !completed) }
-                if (!completed) ghActionPoll?.postDelayed(ghActionRunnable!!, 3000L) else ghActionPollWanted = false
+                runOnUiThread {
+                    render(
+                        if (completed) "Actions selesai." else "Actions sedang berjalan…",
+                        jobs,
+                        runUrl,
+                        !completed,
+                        runFound = true
+                    )
+                }
+                if (!completed) {
+                    ghActionPoll?.postDelayed(ghActionRunnable!!, 3000L)
+                } else {
+                    ghActionPollWanted = false
+                }
             } catch (e: Throwable) {
                 val raw = e.message.orEmpty()
                 val message = when {
@@ -1501,11 +1747,12 @@ internal fun MainActivity.ghShowActionsScreen(result: GhResult) {
                     ghIsNetworkError(e) -> "Tidak ada koneksi internet. Periksa Wi-Fi/data lalu coba lagi."
                     else -> ghFriendlyError(e)
                 }
-                runOnUiThread { render("Belum bisa membaca Actions: $message") }
+                runOnUiThread { render("Belum bisa membaca Actions: $message", runFound = true) }
                 ghActionPoll?.postDelayed(ghActionRunnable!!, 5000L)
             }
         }
     }
+
     ghActionPoll = Handler(Looper.getMainLooper())
     ghActionRunnable = Runnable { poll() }
     ghActionPollWanted = true
