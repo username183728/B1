@@ -1,0 +1,1745 @@
+package com.example.aidetest
+
+import android.Manifest
+import android.app.*
+import android.content.*
+import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.*
+import android.provider.Settings
+import android.text.InputType
+import android.view.*
+import android.widget.*
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.airbnb.lottie.LottieAnimationView
+import com.airbnb.lottie.LottieDrawable
+import com.example.aidetest.MainActivity.GhActionJob
+import com.example.aidetest.MainActivity.GhCancelException
+import com.example.aidetest.MainActivity.GhField
+import com.example.aidetest.MainActivity.GhProgress
+import com.example.aidetest.MainActivity.GhResult
+import java.io.*
+import java.net.*
+import java.nio.charset.StandardCharsets
+import java.security.*
+import java.util.*
+import java.util.zip.*
+import kotlin.concurrent.thread
+import kotlin.math.roundToInt
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * Layar & dialog GitHub (pengaturan, browser repo, progress, hasil, Actions, hapus).
+ * Dipindah dari MainActivity (modularisasi bertahap, Step 16). State `gh*` tetap
+ * menjadi field MainActivity karena extension tidak dapat memiliki backing field.
+ */
+
+// ----- warna & helper kecil (mengikuti tema terang/gelap aplikasi) -----
+internal fun MainActivity.ghc(dark: Long, light: Long): Int = (if (isDarkTheme) dark else light).toInt()
+
+internal fun MainActivity.ghRound(fill: Int, radiusDp: Int, stroke: Int? = null, strokeDp: Int = 1): GradientDrawable =
+    GradientDrawable().apply {
+        setColor(fill)
+        cornerRadius = dp(radiusDp).toFloat()
+        if (stroke != null) setStroke(dp(strokeDp), stroke)
+    }
+
+/** Terapkan sudut tumpul konsisten pada dialog GitHub, termasuk panel dan inset konten. */
+internal fun MainActivity.ghStyleRoundedDialog(dialog: AlertDialog, radiusDp: Int = 24): AlertDialog {
+    dialog.window?.setBackgroundDrawable(ghRound(ghCard, radiusDp, ghStroke))
+    dialog.window?.decorView?.setPadding(dp(2), dp(2), dp(2), dp(2))
+    return dialog
+}
+
+internal fun MainActivity.ghText(text: String, sp: Float, color: Int = ghInk, bold: Boolean = false): TextView = TextView(this).apply {
+    this.text = text
+    textSize = sp
+    setTextColor(color)
+    includeFontPadding = false
+    if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+}
+
+internal fun MainActivity.ghIcon(name: String, sp: Float, color: Int = ghInk): MdiIconView =
+    MdiIconView(this).apply { setIconName(name); setIconSize(sp); setTextColor(color) }
+
+internal fun MainActivity.ghLogo(sizeDp: Int, color: Int): PublishLogoView =
+    PublishLogoView(this).apply { this.color = color; layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp)) }
+
+internal fun MainActivity.ghHideKeyboard(v: View) {
+    runCatching {
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+            .hideSoftInputFromWindow(v.windowToken, 0)
+    }
+}
+
+internal fun MainActivity.ghWatch(edit: EditText, onChange: () -> Unit) {
+    edit.addTextChangedListener(object : android.text.TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+        override fun afterTextChanged(s: android.text.Editable?) { onChange() }
+    })
+}
+
+internal fun MainActivity.ghFieldBg(focused: Boolean, error: Boolean): GradientDrawable =
+    ghRound(ghCard, 16, if (error) ghDanger else if (focused) ghInk else ghStroke, if (focused || error) 2 else 1)
+
+internal fun MainActivity.ghField(labelText: String, iconName: String, hint: String, initial: String, password: Boolean = false): GhField {
+    val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    root.addView(ghText(labelText, 13f, ghInk, true), LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(7); leftMargin = dp(2) })
+    val row = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), 0, dp(10), 0)
+        background = ghFieldBg(false, false)
+    }
+    row.addView(ghIcon(iconName, 20f, ghMuted), LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(10) })
+    val edit = EditText(this).apply {
+        this.hint = hint
+        setText(initial)
+        textSize = 15f
+        setTextColor(ghInk)
+        setHintTextColor(ghMuted)
+        background = null
+        setPadding(0, 0, 0, 0)
+        maxLines = 1
+        setSingleLine(true)
+        inputType = if (password) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+    }
+    row.addView(edit, LinearLayout.LayoutParams(0, dp(50), 1f))
+    if (password) {
+        val eye = ghIcon("eye-outline", 20f, ghMuted).apply {
+            isClickable = true
+            setOnClickListener {
+                val visible = edit.transformationMethod == null
+                val cursor = edit.selectionStart
+                if (visible) {
+                    edit.transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
+                    setIconName("eye-outline")
+                } else {
+                    edit.transformationMethod = null
+                    setIconName("eye-off-outline")
+                }
+                edit.setSelection(cursor.coerceAtLeast(0).coerceAtMost(edit.text.length))
+            }
+        }
+        row.addView(eye, LinearLayout.LayoutParams(dp(40), dp(40)))
+    }
+    root.addView(row, LinearLayout.LayoutParams(-1, -2))
+    val error = ghText("", 12f, ghDanger).apply { visibility = View.GONE; setPadding(dp(4), dp(6), 0, 0) }
+    root.addView(error, LinearLayout.LayoutParams(-1, -2))
+    root.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) }
+    val field = GhField(root, edit, error, row)
+    edit.setOnFocusChangeListener { _, hasFocus -> row.background = ghFieldBg(hasFocus, error.visibility == View.VISIBLE) }
+    ghWatch(edit) { ghClearError(field) }
+    return field
+}
+
+internal fun MainActivity.ghSetError(field: GhField, message: String) {
+    field.error.text = message
+    field.error.visibility = View.VISIBLE
+    field.row.background = ghFieldBg(field.edit.hasFocus(), true)
+    Motion.error(field.row)
+}
+
+internal fun MainActivity.ghClearError(field: GhField) {
+    if (field.error.visibility == View.VISIBLE) {
+        field.error.visibility = View.GONE
+        field.row.background = ghFieldBg(field.edit.hasFocus(), false)
+    }
+}
+
+internal fun MainActivity.ghPressable(view: View, onClick: () -> Unit) {
+    view.isClickable = true
+    view.isFocusable = true
+    view.setOnClickListener {
+        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        Motion.tap(view, 0.98f)
+        onClick()
+    }
+}
+
+internal fun MainActivity.ghPrimaryButton(text: String, onClick: () -> Unit): LinearLayout = LinearLayout(this).apply {
+    orientation = LinearLayout.HORIZONTAL
+    gravity = Gravity.CENTER
+    background = ghRound(ghInk, 18)
+    addView(ghLogo(22, ghOnInk), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(12) })
+    addView(ghText(text, 15f, ghOnInk, true))
+    addView(ghIcon("arrow-right", 18f, ghOnInk), LinearLayout.LayoutParams(dp(22), dp(22)).apply { leftMargin = dp(10) })
+    layoutParams = LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(4); bottomMargin = dp(8) }
+    ghPressable(this, onClick)
+}
+
+internal fun MainActivity.ghOutlineButton(text: String, iconName: String, onClick: () -> Unit): LinearLayout = LinearLayout(this).apply {
+    orientation = LinearLayout.HORIZONTAL
+    gravity = Gravity.CENTER
+    background = ghRound(ghCard, 18, ghStroke)
+    addView(ghIcon(iconName, 19f, ghInk), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(10) })
+    addView(ghText(text, 15f, ghInk, true))
+    layoutParams = LinearLayout.LayoutParams(-1, dp(50)).apply { bottomMargin = dp(8) }
+    ghPressable(this, onClick)
+}
+
+internal fun MainActivity.ghSmallButton(text: String, iconName: String, onClick: () -> Unit): LinearLayout = LinearLayout(this).apply {
+    orientation = LinearLayout.HORIZONTAL
+    gravity = Gravity.CENTER
+    background = ghRound(ghSoft, 12)
+    setPadding(dp(12), 0, dp(12), 0)
+    addView(ghIcon(iconName, 17f, ghInk), LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(6) })
+    addView(ghText(text, 13f, ghInk, true))
+    ghPressable(this, onClick)
+}
+
+internal fun MainActivity.ghSwitchRow(iconName: String, text: String, checked: Boolean, onChange: (Boolean) -> Unit): LinearLayout {
+    val row = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(4), dp(2), 0, dp(2))
+    }
+    row.addView(ghIcon(iconName, 18f, ghMuted), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(10) })
+    row.addView(ghText(text, 13.5f, ghMuted), LinearLayout.LayoutParams(0, -2, 1f))
+    val sw = Switch(this).apply {
+        isChecked = checked
+        val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        trackTintList = android.content.res.ColorStateList(states, intArrayOf(ghInk, ghStroke))
+        thumbTintList = android.content.res.ColorStateList(states, intArrayOf(ghOnInk, ghCard))
+        setOnCheckedChangeListener { v, value -> v.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK); onChange(value) }
+    }
+    row.addView(sw, LinearLayout.LayoutParams(-2, dp(40)))
+    return row
+}
+
+internal fun MainActivity.ghSectionTitle(text: String): TextView =
+    ghText(text, 12.5f, ghMuted, true).apply { setPadding(dp(2), dp(6), 0, dp(10)) }
+
+// ----- pergantian layar -----
+internal fun MainActivity.ghShow(screen: View, titleText: String) {
+    val stage = ghStage ?: return
+    title.text = titleText
+    stage.removeAllViews()
+    stage.addView(screen, FrameLayout.LayoutParams(-1, -2))
+    screen.alpha = 0f
+    screen.translationY = dp(14).toFloat()
+    screen.animate().alpha(1f).translationY(0f).setDuration(260).start()
+    scroll.post { scroll.smoothScrollTo(0, 0) }
+}
+
+// =====================================================================
+// Layar 1: Pengaturan GitHub
+// =====================================================================
+internal fun MainActivity.githubZipTool() {
+    clearPage("GitHub Publisher")
+    ghUserValue = prefs.getString("gh_user", null) ?: "username183728"
+    ghRepoValue = prefs.getString("gh_repo", null) ?: "B1"
+    // Pulihkan ZIP terakhir supaya nama file yang sudah dipilih tetap tampil.
+    githubZipUri = prefs.getString("gh_selected_zip_uri", null)?.let {
+        runCatching { Uri.parse(it) }.getOrNull()
+    }
+    ghBranch = prefs.getString("gh_branch", null) ?: "main"
+    ghSaveToken = prefs.getBoolean("gh_save_token", true)
+    ghPrivateRepo = prefs.getBoolean("gh_private", true)
+    ghTokenValue = if (ghSaveToken) prefs.getString("gh_token_enc", null)?.let { GithubTokenVault.decrypt(it) }.orEmpty() else ""
+    ghCommitValue = prefs.getString("gh_commit", null) ?: "Upload project via GITLS"
+    ghStage = FrameLayout(this)
+    content.addView(ghStage, LinearLayout.LayoutParams(-1, -2))
+    val pendingResult = ghPendingResult
+    val pendingError = ghPendingError
+    when {
+        ghRunning -> {
+            // Upload masih berjalan: kembali ke layar proses, bukan halaman pengaturan.
+            ghShow(ghProgressScreen("", ghUserValue, ghRepoValue, ghBranch), "Proses Upload")
+            ghReplayProgress()
+            ghHandler.removeCallbacks(ghTicker)
+            ghHandler.post(ghTicker)
+        }
+        pendingResult != null -> { ghPendingResult = null; ghShowResult(pendingResult) }
+        pendingError != null -> {
+            ghPendingError = null
+            ghShow(ghProgressScreen("", ghUserValue, ghRepoValue, ghBranch), "Proses Upload")
+            ghReplayProgress()
+            ghShowFailure(pendingError)
+        }
+        else -> {
+            ghShow(ghSettingsScreen(), "Pengaturan GitHub")
+            // Pulihkan preview ZIP terakhir bila URI masih bisa dibaca.
+            githubZipUri?.let { uri ->
+                if (prefs.getString("gh_selected_zip_name", null).orEmpty().isNotBlank()) {
+                    githubUploadStatus?.text = "Memulihkan ZIP terakhir…"
+                    prepareGithubZipPreview(uri)
+                }
+            }
+        }
+    }
+}
+
+internal fun MainActivity.ghSettingsScreen(): LinearLayout {
+    val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(2), dp(4), dp(2), dp(24)) }
+
+    // Header publisher sengaja tidak dibuat sebagai kartu besar. Judul ditampilkan
+    // compact di top bar, sejajar dengan tombol kembali dan menu.
+    val user = ghField("Username", "account-outline", "username GitHub", ghUserValue)
+    val repo = ghField("Repository", "source-repository", "nama repository", ghRepoValue)
+    screen.addView(user.root)
+    screen.addView(repo.root)
+
+    // branch (dropdown)
+    screen.addView(ghText("Branch", 13f, ghInk, true), LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(7); leftMargin = dp(2) })
+    val branchRow = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), 0, dp(14), 0)
+        background = ghFieldBg(false, false)
+    }
+    branchRow.addView(ghIcon("source-branch", 20f, ghMuted), LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(10) })
+    val branchText = ghText(ghBranch, 15f, ghInk)
+    branchRow.addView(branchText, LinearLayout.LayoutParams(0, -2, 1f))
+    branchRow.addView(ghIcon("chevron-down", 20f, ghMuted), LinearLayout.LayoutParams(dp(24), dp(24)))
+    ghPressable(branchRow) {
+        ghHideKeyboard(branchRow)
+        val options = listOf("main", "master", "develop", "Lainnya…")
+        AlertDialog.Builder(this)
+            .setTitle("Pilih branch")
+            .setItems(options.toTypedArray()) { _, which ->
+                if (which < options.size - 1) {
+                    ghBranch = options[which]
+                    branchText.text = ghBranch
+                } else {
+                    val input = EditText(this).apply { setText(ghBranch); setSingleLine(true); setPadding(dp(20), dp(14), dp(20), dp(14)) }
+                    AlertDialog.Builder(this)
+                        .setTitle("Nama branch")
+                        .setView(input)
+                        .setNegativeButton("Batal", null)
+                        .setPositiveButton("Pakai") { _, _ ->
+                            val value = input.text.toString().trim()
+                            if (value.matches(Regex("[A-Za-z0-9._/-]+"))) { ghBranch = value; branchText.text = value }
+                            else toast("Nama branch tidak valid")
+                        }.show()
+                }
+            }.show()
+    }
+    screen.addView(branchRow, LinearLayout.LayoutParams(-1, dp(52)).apply { bottomMargin = dp(12) })
+
+    val token = ghField("Token (Personal Access Token)", "key-variant", "ghp_••••••••••••", ghTokenValue, password = true)
+    token.root.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) }
+    screen.addView(token.root)
+    screen.addView(ghSwitchRow("information-outline", "Simpan token (terenkripsi)", ghSaveToken) { ghSaveToken = it })
+    screen.addView(ghSwitchRow("lock-outline", "Repository baru dibuat private", ghPrivateRepo) { ghPrivateRepo = it })
+
+    val commit = ghField("Pesan commit", "text-box-outline", "Upload project via GITLS", ghCommitValue)
+    commit.root.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14); bottomMargin = dp(8) }
+    screen.addView(commit.root)
+
+    // sumber project
+    screen.addView(ghSectionTitle("Sumber project"))
+    screen.addView(ghSourcePicker())
+
+    // status
+    val statusRow = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(4), dp(10), dp(4), dp(14))
+    }
+    statusRow.addView(ghIcon("information-outline", 16f, ghMuted), LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
+    val statusText = ghText("Pilih ZIP atau folder untuk memulai.", 12f, ghMuted)
+    githubUploadStatus = statusText
+    statusRow.addView(statusText, LinearLayout.LayoutParams(0, -2, 1f))
+    screen.addView(statusRow)
+
+    screen.addView(ghPrimaryButton("Simpan & Upload") {
+        ghHideKeyboard(screen)
+        val owner = user.edit.text.toString().trim()
+        val repository = repo.edit.text.toString().trim()
+        val pat = token.edit.text.toString().trim()
+        val message = commit.edit.text.toString().trim()
+        var valid = true
+        if (!owner.matches(Regex("[A-Za-z0-9_.-]+"))) { ghSetError(user, "Username hanya boleh huruf, angka, titik, garis"); valid = false }
+        if (!repository.matches(Regex("[A-Za-z0-9_.-]+"))) { ghSetError(repo, "Nama repository tidak valid"); valid = false }
+        if (pat.isBlank()) { ghSetError(token, "Token wajib diisi"); valid = false }
+        if (!valid) return@ghPrimaryButton
+        if (!validateGithubInputs(owner, repository, pat, ghBranch)) return@ghPrimaryButton
+        val commitMessage = message.ifBlank { "Upload project via GITLS" }
+        val zipUri = githubZipUri
+        val folderUri = githubFolderUri
+        if (ghSource == 0 && zipUri == null) { toast("Pilih file ZIP terlebih dahulu"); return@ghPrimaryButton }
+        if (ghSource == 0 && githubZipPreviewFiles.isEmpty()) { toast("Tunggu analisis ZIP selesai atau pilih ZIP lagi"); return@ghPrimaryButton }
+        if (ghSource == 1 && folderUri == null) { toast("Pilih folder project terlebih dahulu"); return@ghPrimaryButton }
+
+        ghUserValue = owner; ghRepoValue = repository; ghTokenValue = pat; ghCommitValue = commitMessage
+        ghSaveSettings(owner, repository, pat, commitMessage)
+
+        val branch = ghBranch
+        val makePrivate = ghPrivateRepo
+        if (ghSource == 0 && zipUri != null) {
+            val root = githubZipRoot
+            val excluded = githubZipExcluded.toSet()
+            ghStartUpload("ZIP", owner, repository, branch) { p -> uploadZipToGitHub(zipUri, owner, repository, pat, branch, commitMessage, root, excluded, makePrivate, p) }
+        } else if (folderUri != null) {
+            ghStartUpload("Folder", owner, repository, branch) { p -> uploadFolderToGitHub(folderUri, owner, repository, pat, branch, commitMessage, makePrivate, p) }
+        }
+    })
+
+    screen.addView(
+        ghText("Token dipakai langsung untuk request ke GitHub. Bila \"Simpan token\" mati, token tidak disimpan sama sekali. Butuh izin Contents read/write (classic: scope repo).", 11f, ghMuted)
+            .apply { setPadding(dp(4), dp(4), dp(4), 0); setLineSpacing(0f, 1.15f) }
+    )
+
+    screen.addView(ghOutlineButton("Lihat Repository di GitHub", "folder-open-outline") {
+        val owner = user.edit.text.toString().trim()
+        val repository = repo.edit.text.toString().trim()
+        val pat = token.edit.text.toString().trim()
+        if (!owner.matches(Regex("[A-Za-z0-9_.-]+")) || !repository.matches(Regex("[A-Za-z0-9_.-]+")) || pat.isBlank()) {
+            toast("Username, repository, dan token wajib diisi")
+            return@ghOutlineButton
+        }
+        ghUserValue = owner; ghRepoValue = repository; ghTokenValue = pat
+        ghSaveSettings(owner, repository, pat, commit.edit.text.toString().trim().ifBlank { "Upload project via GITLS" })
+        ghShow(ghRepositoryBrowserScreen(""), "Isi Repository")
+    })
+    return screen
+}
+
+// ----- browser repository GitHub: lihat folder/file + hapus dengan verifikasi ganda -----
+internal fun MainActivity.ghRepositoryBrowserScreen(path: String): LinearLayout {
+    val owner = ghUserValue.trim()
+    val repo = ghRepoValue.trim()
+    val token = ghTokenValue.trim().ifBlank {
+        prefs.getString("gh_token_enc", null)?.let { GithubTokenVault.decrypt(it) }.orEmpty()
+    }
+    val branch = ghBranch.ifBlank { "main" }
+    val cleanPath = path.trim('/').replace("//", "/")
+    val screen = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(2), dp(4), dp(2), dp(24))
+    }
+
+    val top = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(10), dp(10), dp(10), dp(10))
+        background = ghRound(ghSoft, 16)
+    }
+    val back = ghIcon("arrow-left", 20f, ghInk).apply {
+        visibility = if (cleanPath.isBlank()) View.GONE else View.VISIBLE
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+        isClickable = true
+        setOnClickListener {
+            val parent = cleanPath.substringBeforeLast('/', "")
+            ghShow(ghRepositoryBrowserScreen(parent), "Isi Repository")
+        }
+    }
+    top.addView(back, LinearLayout.LayoutParams(dp(42), dp(42)))
+    val titleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    titleBox.addView(ghText(if (cleanPath.isBlank()) "$owner/$repo" else cleanPath, 15f, ghInk, true))
+    titleBox.addView(ghText("Branch: $branch", 11f, ghMuted).apply { setPadding(0, dp(3), 0, 0) })
+    top.addView(titleBox, LinearLayout.LayoutParams(0, -2, 1f))
+    val refresh = ghIcon("refresh", 20f, ghInk).apply {
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+        isClickable = true
+        setOnClickListener { ghShow(ghRepositoryBrowserScreen(cleanPath), "Isi Repository") }
+    }
+    top.addView(refresh, LinearLayout.LayoutParams(dp(42), dp(42)))
+    screen.addView(top, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+    val info = ghText("Memuat isi repository…", 12f, ghMuted).apply { setPadding(dp(8), dp(8), dp(8), dp(8)) }
+    screen.addView(info)
+    val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    val scroll = ScrollView(this).apply { addView(list) }
+    screen.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+    if (token.isBlank()) {
+        info.text = "Token GitHub belum tersedia."
+        return screen
+    }
+
+    toolThread {
+        val result = runCatching {
+            val endpoint = "https://api.github.com/repos/${Uri.encode(owner)}/${Uri.encode(repo)}/contents/${if (cleanPath.isBlank()) "" else encodePath(cleanPath)}?ref=${Uri.encode(branch)}"
+            val json = githubRequestRaw(endpoint, token)
+            if (json.trimStart().startsWith("[")) {
+                val arr = JSONArray(json)
+                val items = (0 until arr.length()).map { arr.getJSONObject(it) }
+                    .sortedWith(compareBy<JSONObject>({ it.optString("type") != "dir" }, { it.optString("name").lowercase(Locale.getDefault()) }))
+                items
+            } else {
+                listOf(JSONObject(json))
+            }
+        }
+        runOnUiThread {
+            if (isFinishing) return@runOnUiThread
+            list.removeAllViews()
+            result.onSuccess { items ->
+                info.text = if (items.isEmpty()) "Folder kosong." else "${items.size} item"
+                if (items.isEmpty()) return@onSuccess
+                items.forEach { item ->
+                    val itemPath = item.optString("path")
+                    val isDir = item.optString("type") == "dir"
+                    val row = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(12), dp(8), dp(4), dp(8))
+                        background = ghRound(ghCard, 18, ghStroke)
+                    }
+                    val icon = ghIcon(if (isDir) "folder-outline" else "file-outline", 21f, ghInk)
+                    row.addView(icon, LinearLayout.LayoutParams(dp(38), dp(38)).apply { rightMargin = dp(8) })
+                    val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                    texts.addView(ghText(item.optString("name"), 14f, ghInk, true))
+                    texts.addView(ghText(if (isDir) "Folder" else ghFormatBytes(item.optLong("size", 0L)), 11f, ghMuted).apply { setPadding(0, dp(3), 0, 0) })
+                    row.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
+                    val trash = ghIcon("delete-outline", 20f, ghDanger).apply {
+                        setPadding(dp(8), dp(8), dp(8), dp(8))
+                        isClickable = true
+                        contentDescription = "Hapus ${item.optString("name")}"
+                        setOnClickListener {
+                            val target = item.optString("name")
+                            ghConfirmGithubDelete(itemPath, isDir, target, token) {
+                                ghShow(ghRepositoryBrowserScreen(cleanPath), "Isi Repository")
+                            }
+                        }
+                    }
+                    row.addView(trash, LinearLayout.LayoutParams(dp(44), dp(44)))
+                    row.setOnClickListener {
+                        if (isDir) ghShow(ghRepositoryBrowserScreen(itemPath), "Isi Repository")
+                        else ghOpenUrl(item.optString("html_url").ifBlank { "https://github.com/$owner/$repo/blob/$branch/${encodePath(itemPath)}" })
+                    }
+                    list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
+                }
+                val deleteAllLabel = if (cleanPath.isBlank()) "Hapus Semua File Repository" else "Hapus Semua File di Folder Ini"
+                val deleteAll = ghOutlineButton(deleteAllLabel, "delete-sweep-outline") {
+                    ghConfirmGithubDeleteAll(token, cleanPath) {
+                        ghShow(ghRepositoryBrowserScreen(cleanPath), "Isi Repository")
+                    }
+                }
+                // Samakan tinggi dan sudut tombol dengan kartu/file lain agar benar-benar tumpul.
+                deleteAll.layoutParams = LinearLayout.LayoutParams(-1, dp(54)).apply {
+                    topMargin = dp(10)
+                    bottomMargin = dp(2)
+                }
+                list.addView(deleteAll)
+            }.onFailure { e ->
+                info.text = "Gagal memuat repository."
+                toast(e.message ?: "Gagal membaca GitHub")
+            }
+        }
+    }
+    return screen
+}
+
+internal fun MainActivity.ghConfirmGithubDelete(path: String, isDir: Boolean, name: String, token: String, onDone: () -> Unit) {
+    val kind = if (isDir) "folder" else "file"
+    val deleteLabel = "Hapus $kind $name"
+
+    // Verifikasi pertama: cukup pilih Batal atau tombol hapus dengan nama item.
+    AlertDialog.Builder(this)
+        .setTitle("Hapus $kind?")
+        .setMessage("$name\n\nItem ini akan dihapus dari branch $ghBranch dan perubahan akan disimpan ke GitHub.")
+        .setNegativeButton("Batal", null)
+        .setPositiveButton(deleteLabel) { _, _ ->
+            // Verifikasi kedua: tidak perlu mengetik HAPUS.
+            AlertDialog.Builder(this)
+                .setTitle("Konfirmasi sekali lagi")
+                .setMessage("Yakin ingin menghapus $kind ini?\n\n$name")
+                .setNegativeButton("Batal", null)
+                .setPositiveButton(deleteLabel) { _, _ ->
+                    ghRunDelete(path, isDir, token, onDone)
+                }
+                .show().also { ghStyleRoundedDialog(it) }
+        }
+        .show().also { ghStyleRoundedDialog(it) }
+}
+
+internal fun MainActivity.ghConfirmGithubDeleteAll(token: String, prefix: String, onDone: () -> Unit) {
+    val scope = prefix.trim('/').let { if (it.isBlank()) "seluruh repository" else "folder $it" }
+
+    // Hapus semua memakai pola konfirmasi yang sama dengan hapus satu file/folder:
+    // tidak ada input teks "HAPUS SEMUA" dan tetap ada konfirmasi kedua.
+    AlertDialog.Builder(this)
+        .setTitle("Hapus semua?")
+        .setMessage("Semua file di $scope pada branch $ghBranch akan dihapus. Folder kosong juga akan hilang karena GitHub tidak menyimpan folder kosong.")
+        .setNegativeButton("Batal", null)
+        .setPositiveButton("Hapus Semua") { _, _ ->
+            AlertDialog.Builder(this)
+                .setTitle("Konfirmasi sekali lagi")
+                .setMessage("Yakin ingin menghapus semua file?\n\n$scope")
+                .setNegativeButton("Batal", null)
+                .setPositiveButton("Hapus Semua") { _, _ ->
+                    ghRunDeleteAll(token, prefix, onDone)
+                }
+                .show().also { ghStyleRoundedDialog(it) }
+        }
+        .show().also { ghStyleRoundedDialog(it) }
+}
+
+internal fun MainActivity.ghShowError(title: String, e: Throwable) {
+    if (isFinishing) return
+    AlertDialog.Builder(this).setTitle(title).setMessage(ghDeleteError(e)).setPositiveButton("OK", null)
+        .show().also { ghStyleRoundedDialog(it) }
+}
+
+internal fun MainActivity.ghRunDelete(path: String, isDir: Boolean, token: String, onDone: () -> Unit) {
+    AlertDialog.Builder(this).setTitle("Menghapus…").setMessage("Menyiapkan commit penghapusan.").setCancelable(false).create().also { dialog ->
+        dialog.show()
+        toolThread {
+            val result = runCatching {
+                if (isDir) ghDeleteTreePrefix(path, token) else ghDeleteSingleFile(path, token)
+            }
+            runOnUiThread {
+                dialog.dismiss()
+                result.onSuccess { toast("$path berhasil dihapus"); onDone() }
+                    .onFailure { ghShowError("Gagal menghapus", it) }
+            }
+        }
+    }
+}
+
+internal fun MainActivity.startGithubDeleteService(token: String, prefix: String) {
+    if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9107)
+    }
+    val intent = Intent(this, GithubDeleteService::class.java).apply {
+        putExtra(GithubDeleteService.EXTRA_TOKEN, token)
+        putExtra(GithubDeleteService.EXTRA_OWNER, ghUserValue)
+        putExtra(GithubDeleteService.EXTRA_REPO, ghRepoValue)
+        putExtra(GithubDeleteService.EXTRA_BRANCH, ghBranch)
+        putExtra(GithubDeleteService.EXTRA_PREFIX, prefix)
+    }
+    ContextCompat.startForegroundService(this, intent)
+}
+
+internal fun MainActivity.ghRunDeleteAll(token: String, prefix: String, onDone: () -> Unit) {
+    // Penghapusan dijalankan oleh ForegroundService supaya tetap hidup ketika
+    // dialog ditutup, Activity dipindah ke background, atau pengguna keluar
+    // dari halaman. Progress juga tetap terlihat di notification shade.
+    startGithubDeleteService(token, prefix)
+
+    val box = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(24), dp(20), dp(24), dp(12))
+    }
+    val status = TextView(this).apply {
+        text = "Menyiapkan penghapusan…"
+        textSize = 17f
+        setTextColor(ghInk)
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+    }
+    val percent = TextView(this).apply {
+        text = "0%"
+        textSize = 14f
+        setTextColor(ghMuted)
+        gravity = Gravity.END
+    }
+    val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+        max = 100
+        progress = 0
+        isIndeterminate = false
+    }
+    val detail = TextView(this).apply {
+        text = "Proses berjalan di latar belakang…"
+        textSize = 12f
+        setTextColor(ghMuted)
+        setPadding(0, dp(8), 0, 0)
+    }
+    val tip = TextView(this).apply {
+        text = "Sembunyikan aman. Proses tetap berjalan dan bisa dipantau dari notifikasi."
+        textSize = 12f
+        setTextColor(ghMuted)
+        setPadding(0, dp(12), 0, 0)
+    }
+    val row = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+    row.addView(status, LinearLayout.LayoutParams(0, -2, 1f))
+    row.addView(percent, LinearLayout.LayoutParams(dp(52), -2))
+    box.addView(row)
+    box.addView(progress, LinearLayout.LayoutParams(-1, dp(12)).apply { topMargin = dp(12) })
+    box.addView(detail)
+    box.addView(tip)
+
+    val dialog = AlertDialog.Builder(this)
+        .setTitle("Menghapus semua…")
+        .setView(box)
+        .setCancelable(false)
+        .setNegativeButton("Sembunyikan") { d, _ -> d.dismiss() }
+        .setPositiveButton("Tutup") { d, _ -> d.dismiss() }
+        .create()
+    dialog.show()
+    ghStyleRoundedDialog(dialog)
+
+    val handler = Handler(Looper.getMainLooper())
+    val poll = object : Runnable {
+        override fun run() {
+            if (isFinishing || isDestroyed) return
+            val prefsState = getSharedPreferences("gh_delete_state", MODE_PRIVATE)
+            val activeId = prefsState.getString("job_id", "")
+            val myId = intentJobId(token, prefix)
+            if (activeId == myId) {
+                val pct = prefsState.getInt("progress", 0).coerceIn(0, 100)
+                progress.progress = pct
+                percent.text = "$pct%"
+                status.text = prefsState.getString("title", "Menghapus…")
+                detail.text = prefsState.getString("detail", "Proses berjalan di latar belakang…")
+                if (prefsState.getBoolean("finished", false)) {
+                    dialog.dismiss()
+                    val ok = prefsState.getBoolean("success", false)
+                    toast(prefsState.getString("result", if (ok) "Semua file berhasil dihapus" else "Penghapusan gagal") ?: "Selesai")
+                    onDone()
+                    return
+                }
+            }
+            handler.postDelayed(this, 350L)
+        }
+    }
+    handler.post(poll)
+}
+
+internal fun MainActivity.ghSaveSettings(owner: String, repository: String, pat: String, commitMessage: String) {
+    val editor = prefs.edit()
+        .putString("gh_user", owner).putString("gh_repo", repository).putString("gh_branch", ghBranch)
+        .putString("gh_commit", commitMessage)
+        .putBoolean("gh_save_token", ghSaveToken).putBoolean("gh_private", ghPrivateRepo)
+    if (ghSaveToken) {
+        val enc = GithubTokenVault.encrypt(pat)
+        if (enc != null) editor.putString("gh_token_enc", enc) else editor.remove("gh_token_enc")
+    } else {
+        editor.remove("gh_token_enc")
+    }
+    editor.apply()
+}
+
+// ----- pemilih sumber: ZIP / Folder -----
+internal fun MainActivity.ghSourcePicker(): LinearLayout {
+    val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    val tabs = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(dp(4), dp(4), dp(4), dp(4))
+        background = ghRound(ghSoft, 16)
+    }
+    val zipPanel = ghZipPanel()
+    val folderPanel = ghFolderPanel()
+    val tabViews = ArrayList<LinearLayout>()
+    fun paintTabs() {
+        tabViews.forEachIndexed { index, tab ->
+            val selected = index == ghSource
+            tab.background = if (selected) ghRound(ghCard, 12, ghStroke) else null
+            for (i in 0 until tab.childCount) {
+                val child = tab.getChildAt(i)
+                if (child is MdiIconView) child.setTextColor(if (selected) ghInk else ghMuted)
+                if (child is TextView && child !is MdiIconView) child.setTextColor(if (selected) ghInk else ghMuted)
+            }
+        }
+        zipPanel.visibility = if (ghSource == 0) View.VISIBLE else View.GONE
+        folderPanel.visibility = if (ghSource == 1) View.VISIBLE else View.GONE
+    }
+    fun tab(label: String, iconName: String, index: Int): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        addView(ghIcon(iconName, 18f, ghMuted), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(8) })
+        addView(ghText(label, 14f, ghMuted, true))
+        isClickable = true
+        setOnClickListener {
+            if (ghSource != index) {
+                it.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                ghSource = index
+                paintTabs()
+                val panel = if (index == 0) zipPanel else folderPanel
+                panel.alpha = 0f
+                panel.animate().alpha(1f).setDuration(200).start()
+            }
+        }
+    }
+    tabViews.add(tab("File ZIP", "folder-zip-outline", 0))
+    tabViews.add(tab("Folder", "folder-open-outline", 1))
+    tabViews.forEach { tabs.addView(it, LinearLayout.LayoutParams(0, dp(42), 1f)) }
+    box.addView(tabs, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+    box.addView(zipPanel)
+    box.addView(folderPanel)
+    paintTabs()
+    return box
+}
+
+internal fun MainActivity.ghSourceCard(iconName: String, titleView: TextView, hintText: String): LinearLayout {
+    val card = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(16), dp(16), dp(16))
+        background = ghRound(ghCard, 18, ghStroke)
+    }
+    val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+    val badge = ghIcon(iconName, 22f, ghInk).apply { background = ghRound(ghSoft, 14) }
+    top.addView(badge, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(14) })
+    val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    texts.addView(titleView.apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+    texts.addView(ghText(hintText, 12f, ghMuted).apply { setPadding(0, dp(4), 0, 0) })
+    top.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
+    card.addView(top)
+    return card
+}
+
+internal fun MainActivity.ghZipPanel(): LinearLayout {
+    val restoredName = prefs.getString("gh_selected_zip_name", null)
+    val zipTitleText = restoredName?.takeIf { it.isNotBlank() }
+        ?: githubZipUri?.let { queryName(it) }
+        ?: "Belum ada ZIP dipilih"
+    val zipTitle = ghText(zipTitleText, 14.5f, ghInk, true)
+    githubZipLabel = zipTitle
+    // Jika URI masih valid, tampilkan ukuran tanpa menunggu pengguna memilih ulang.
+    githubZipUri?.let { uri ->
+        val size = runCatching { contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } }.getOrNull() ?: -1L
+        if (size > 0 && zipTitleText != "Belum ada ZIP dipilih") {
+            zipTitle.text = "$zipTitleText • ${ghFormatBytes(size)}"
+        }
+    }
+    val card = ghSourceCard("folder-zip-outline", zipTitle, "Preview isi, atur root, dan kecualikan file.")
+    val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(14), 0, 0) }
+    actions.addView(ghSmallButton("Pilih ZIP", "folder-open-outline") {
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }, GITHUB_ZIP_PICK_REQUEST)
+    }, LinearLayout.LayoutParams(0, dp(40), 1f).apply { rightMargin = dp(8) })
+    actions.addView(ghSmallButton("Kelola isi", "file-tree-outline") {
+        val uri = githubZipUri
+        if (uri == null) toast("Pilih ZIP terlebih dahulu") else showGithubZipPreview(uri)
+    }, LinearLayout.LayoutParams(0, dp(40), 1f))
+    card.addView(actions)
+    return LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(card) }
+}
+
+internal fun MainActivity.ghFolderPanel(): LinearLayout {
+    val folderTitle = ghText("Belum ada folder dipilih", 14.5f, ghInk, true)
+    githubFolderLabel = folderTitle
+    val card = ghSourceCard("folder-outline", folderTitle, "Semua file dan subfolder ikut terkirim.")
+    val previewText = ghText("Isi folder akan tampil di sini.", 11.5f, ghMuted).apply {
+        setPadding(dp(10), dp(10), dp(10), dp(10))
+        background = ghRound(ghSoft, 12)
+        setLineSpacing(0f, 1.2f)
+        maxLines = 9
+    }
+    githubFolderPreview = previewText
+    card.addView(previewText, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
+    val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(12), 0, 0) }
+    actions.addView(ghSmallButton("Pilih folder", "folder-open-outline") {
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply { addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) }, GITHUB_FOLDER_PICK_REQUEST)
+    }, LinearLayout.LayoutParams(-1, dp(40)))
+    card.addView(actions)
+    return LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(card) }
+}
+
+internal fun MainActivity.validateGithubInputs(owner: String, repository: String, pat: String, branch: String): Boolean {
+    if (!owner.matches(Regex("[A-Za-z0-9_.-]+"))) { toast("Username GitHub tidak valid"); return false }
+    if (!repository.matches(Regex("[A-Za-z0-9_.-]+"))) { toast("Nama repository tidak valid"); return false }
+    if (pat.isBlank()) { toast("Masukkan GitHub token"); return false }
+    if (!branch.matches(Regex("[A-Za-z0-9._/-]+"))) { toast("Nama branch tidak valid"); return false }
+    return true
+}
+
+// =====================================================================
+// Layar 2: Proses Upload (animasi)
+// =====================================================================
+internal fun MainActivity.ghStepTitle(index: Int, branch: String): String = when (index) {
+    0 -> "Menghubungkan ke GitHub"
+    1 -> "Membuat repository (jika belum ada)"
+    2 -> "Mengunggah file"
+    3 -> "Push ke branch $branch"
+    else -> "Verifikasi hasil upload"
+}
+
+/**
+ * Small Bit assistant shown on the GitHub process screen.
+ * Normal state uses the same animation as the bottom navigation.
+ * On error it switches to an open-eye frame, moves slightly up/left and exposes
+ * a tappable "Error" label that opens Bit chat with the failure context.
+ */
+internal fun MainActivity.ghBitProcessAssistant(): FrameLayout {
+    val host = FrameLayout(this).apply {
+        clipChildren = false
+        clipToPadding = false
+        contentDescription = "Bit — status proses"
+    }
+
+    val face = LottieAnimationView(this).apply {
+        setAnimation("bit_face_v5.json")
+        repeatMode = LottieDrawable.RESTART
+        repeatCount = LottieDrawable.INFINITE
+        setMinAndMaxFrame(0, 108)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        isClickable = false
+        isFocusable = false
+        contentDescription = "Bit"
+    }
+    bitProcessFace = face
+    host.addView(face, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.CENTER))
+    applyBitFaceTheme(face)
+    face.post { runCatching { face.playAnimation() }.logFailure("gh.faceAnimation") }
+
+    host.setOnClickListener {
+        playBitThinking()
+        host.postDelayed({ showBitChat() }, 120L)
+    }
+    addPressFeedback(host)
+    return host
+}
+
+internal fun MainActivity.ghProgressScreen(kind: String, owner: String, repo: String, branch: String): LinearLayout {
+    ghStepViews.clear(); ghStepTitles.clear(); ghStepDetails.clear()
+    val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(2), dp(2), dp(2), dp(24)) }
+
+    // Bit sits at the top-right of the process screen, using the same animated face as the nav.
+    val processHeader = FrameLayout(this).apply {
+        clipChildren = false
+        clipToPadding = false
+    }
+    val processBit = createGhBitProcessAssistant()
+    processHeader.addView(processBit, FrameLayout.LayoutParams(dp(104), dp(58), Gravity.TOP or Gravity.END))
+    screen.addView(processHeader, LinearLayout.LayoutParams(-1, dp(58)))
+
+    val ringBox = FrameLayout(this)
+    val ring = ProgressRingView(this).apply {
+        ringColor = ghInk
+        trackColor = ghSoft
+        indeterminate = true
+    }
+    ghRing = ring
+    ringBox.addView(ring, FrameLayout.LayoutParams(-1, -1))
+    val center = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+    center.addView(ghLogo(54, ghInk), LinearLayout.LayoutParams(dp(54), dp(54)).apply { bottomMargin = dp(8); gravity = Gravity.CENTER_HORIZONTAL })
+    ghPercentText = ghText("$ghPct%", 28f, ghInk, true).apply { gravity = Gravity.CENTER; textAlignment = View.TEXT_ALIGNMENT_CENTER }
+    center.addView(ghPercentText, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.CENTER_HORIZONTAL })
+    ringBox.addView(center, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+    screen.addView(ringBox, LinearLayout.LayoutParams(dp(210), dp(210)).apply { topMargin = dp(6); bottomMargin = dp(14) })
+
+    val target = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(12), dp(7), dp(12), dp(7))
+        background = ghRound(ghSoft, 14)
+    }
+    target.addView(ghIcon("source-repository", 15f, ghMuted), LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(6) })
+    target.addView(ghText("$owner/$repo", 12.5f, ghInk, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+    target.addView(ghIcon("source-branch", 15f, ghMuted), LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(12); rightMargin = dp(4) })
+    target.addView(ghText(branch, 12.5f, ghMuted))
+    screen.addView(target, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(22) })
+
+    val steps = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), 0, dp(6), 0) }
+    for (i in 0..4) {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(9), 0, dp(9)) }
+        val state = StepStateView(this).apply {
+            inkColor = ghInk; onInkColor = ghOnInk; mutedColor = ghStroke; dangerColor = ghDanger
+            setState(StepStateView.PENDING, false)
+        }
+        ghStepViews.add(state)
+        row.addView(state, LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(14); topMargin = dp(1) })
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val stepTitle = ghText(ghStepTitle(i, branch), 14.5f, ghMuted)
+        val stepDetail = ghText("", 11.5f, ghMuted).apply { visibility = View.GONE; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE; setPadding(0, dp(4), 0, 0) }
+        ghStepTitles.add(stepTitle); ghStepDetails.add(stepDetail)
+        col.addView(stepTitle); col.addView(stepDetail)
+        row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+        steps.addView(row)
+        if (i < 4) {
+            // Garis timeline tipis di bawah status agar alur proses lebih mudah dibaca.
+            steps.addView(View(this).apply {
+                setBackgroundColor(ghStroke)
+                alpha = 0.75f
+            }, LinearLayout.LayoutParams(dp(2), dp(10)).apply {
+                leftMargin = dp(11)
+                topMargin = dp(-3)
+                bottomMargin = dp(-3)
+            })
+        }
+    }
+    screen.addView(steps, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
+
+    val note = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        background = ghRound(ghSoft, 16)
+    }
+    val spinner = StepStateView(this).apply {
+        inkColor = ghInk; onInkColor = ghOnInk; mutedColor = ghStroke; dangerColor = ghDanger
+        setState(StepStateView.ACTIVE, false)
+    }
+    note.addView(spinner, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(12) })
+    val noteTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    noteTexts.addView(ghText("Mohon tunggu, proses ini mungkin memakan waktu…", 12.5f, ghMuted).apply { setLineSpacing(0f, 1.1f) })
+    ghElapsedText = ghText("Berjalan 00:00", 11.5f, ghMuted).apply { setPadding(0, dp(4), 0, 0) }
+    noteTexts.addView(ghElapsedText)
+    note.addView(noteTexts, LinearLayout.LayoutParams(0, -2, 1f))
+    ghNoteBox = note
+    screen.addView(note, LinearLayout.LayoutParams(-1, -2))
+
+    ghErrorHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    screen.addView(ghErrorHost, LinearLayout.LayoutParams(-1, -2))
+
+    val cancel = ghOutlineButton("Batal", "close-circle") { ghConfirmCancel() }
+    (cancel.layoutParams as LinearLayout.LayoutParams).topMargin = dp(16)
+    ghCancelBtn = cancel
+    ghCancelLabel = cancel.getChildAt(1) as? TextView
+    screen.addView(cancel)
+    return screen
+}
+
+internal fun MainActivity.ghConfirmCancel() {
+    if (!ghRunning || ghCancelled) return
+    AlertDialog.Builder(this)
+        .setTitle("Batalkan upload?")
+        .setMessage("Proses upload ke GitHub akan dihentikan. File yang belum ter-push tidak akan masuk ke repository.")
+        .setNegativeButton("Lanjutkan", null)
+        .setPositiveButton("Batalkan") { _, _ ->
+            if (!ghRunning) return@setPositiveButton
+            ghCancelled = true
+            ghCancelLabel?.text = "Membatalkan…"
+            ghCancelBtn?.alpha = 0.5f
+            ghCancelBtn?.isEnabled = false
+            ghCancelBtn?.isClickable = false
+        }
+        .show()
+}
+
+/** Menggambar ulang layar proses dari status terakhir (dipakai saat masuk kembali ke halaman). */
+internal fun MainActivity.ghReplayProgress() {
+    ghCurrentStep = 0
+    for (i in 0..4) ghStepLast[i]?.let { ghOnProgress(it, store = false) }
+    if (ghCancelled) {
+        ghCancelLabel?.text = "Membatalkan…"
+        ghCancelBtn?.alpha = 0.5f
+        ghCancelBtn?.isEnabled = false
+        ghCancelBtn?.isClickable = false
+    }
+}
+
+internal fun MainActivity.ghNotifyDone(success: Boolean, text: String) {
+    runCatching {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "github_upload"
+        if (Build.VERSION.SDK_INT >= 26) {
+            manager.createNotificationChannel(NotificationChannel(channelId, "Upload GitHub", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Status selesai atau gagal proses upload ke GitHub"
+            })
+        }
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            putExtra("open_github_upload", true)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        val open = PendingIntent.getActivity(
+            this, 99002, openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
+        )
+        val builder = if (Build.VERSION.SDK_INT >= 26) android.app.Notification.Builder(this, channelId) else @Suppress("DEPRECATION") android.app.Notification.Builder(this)
+        builder.setSmallIcon(R.drawable.ic_archive)
+            .setContentTitle(if (success) "Upload GitHub selesai" else "Upload GitHub gagal")
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+        manager.notify(99002, builder.build())
+    }
+}
+
+internal fun MainActivity.ghStartUpload(kind: String, owner: String, repo: String, branch: String, task: ((GhProgress) -> Unit) -> GhResult) {
+    if (ghRunning) { toast("Upload sedang berjalan"); return }
+    ghRetry = { ghStartUpload(kind, owner, repo, branch, task) }
+    if (!ghInternetAvailable()) {
+        AlertDialog.Builder(this)
+            .setTitle("Tidak ada jaringan internet")
+            .setMessage("GITLS membutuhkan koneksi internet untuk meng-upload file ke GitHub. Silakan cek koneksi internet atau Wi-Fi Anda terlebih dahulu.")
+            .setNegativeButton("Batal", null)
+            .setNeutralButton("Cek koneksi") { _, _ -> ghOpenConnectionSettings() }
+            .setPositiveButton("Coba lagi") { _, _ -> ghStartUpload(kind, owner, repo, branch, task) }
+            .show().also { ghStyleRoundedDialog(it) }
+        return
+    }
+    if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        runCatching { ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3001) }.logFailure("gh.notifPermission")
+    }
+    ghCancelled = false
+    ghPendingResult = null
+    ghPendingError = null
+    ghFinishedSec = -1
+    ghPct = 0
+    for (i in 0..4) ghStepLast[i] = null
+    bitPendingChatMessage = null
+    bitProcessErrorView = null
+    bitProcessFace = null
+    ghShow(ghProgressScreen(kind, owner, repo, branch), "Proses Upload")
+    BitRuntimeContext.onProcessStart("Proses Upload", "Upload $kind ke GitHub")
+    ghRunning = true
+    ghCurrentStep = 0
+    ghFileTotal = 0
+    ghStartedAt = SystemClock.elapsedRealtime()
+    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    ghHandler.removeCallbacks(ghTicker)
+    ghHandler.postDelayed(ghTicker, 1000L)
+    ghOnProgress(GhProgress(0, "Menyiapkan $kind…"))
+    toolThread(showLoading = false) {
+        val result = runCatching {
+            task { p ->
+                if (ghCancelled) throw GhCancelException()
+                runOnUiThread { ghOnProgress(p) }
+            }
+        }
+        runOnUiThread {
+            ghRunning = false
+            ghHandler.removeCallbacks(ghTicker)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            ghFinishedSec = ((SystemClock.elapsedRealtime() - ghStartedAt) / 1000L).toInt()
+            val visible = ghStage?.isAttachedToWindow == true
+            val cancelled = ghCancelled || result.exceptionOrNull() is GhCancelException
+            ghCancelled = false
+            when {
+                cancelled -> {
+                    BitRuntimeContext.onProcessCancelled()
+                    ghPendingResult = null; ghPendingError = null
+                    if (visible) { toast("Upload dibatalkan"); ghShow(ghSettingsScreen(), "Pengaturan GitHub") }
+                }
+                result.isSuccess -> {
+                    val r = result.getOrThrow()
+                    BitRuntimeContext.onProcessSuccess("${r.files} file berhasil diunggah ke ${r.owner}/${r.repo} pada ${r.branch}")
+                    if (!visible || !ghAppForeground) ghNotifyDone(true, "${r.owner}/${r.repo} • ${r.files} file berhasil diunggah ke ${r.branch}")
+                    if (visible) ghShowResult(r) else ghPendingResult = r
+                }
+                else -> {
+                    val e = result.exceptionOrNull() ?: IOException("Upload gagal")
+                    val friendly = ghFriendlyError(e)
+                    val errorTitle = when {
+                        ghIsTokenAuthError(e) -> "Token GitHub perlu diperbarui"
+                        ghIsNetworkError(e) -> "Tidak ada koneksi internet"
+                        else -> "Upload gagal"
+                    }
+                    BitRuntimeContext.onProcessError(errorTitle, friendly)
+                    if (!visible || !ghAppForeground) ghNotifyDone(false, ghFriendlyError(e).take(120))
+                    if (visible) ghShowFailure(e) else ghPendingError = e
+                }
+            }
+        }
+    }
+}
+
+internal fun MainActivity.ghOnProgress(p: GhProgress, store: Boolean = true) {
+    if (store && p.step >= ghCurrentStep) {
+        ghStepLast[p.step.coerceIn(0, 4)] = p
+        ghPct = when (p.step) {
+            0 -> 4
+            1 -> 12
+            2 -> if (p.total > 0) 15 + (70 * (p.current - 1).coerceAtLeast(0)) / p.total else 15
+            3 -> 88
+            else -> 96
+        }
+        ghCurrentStep = maxOf(ghCurrentStep, p.step)
+    }
+    val percentForContext = when (p.step) {
+        0 -> 4
+        1 -> 12
+        2 -> if (p.total > 0) 15 + (70 * (p.current - 1).coerceAtLeast(0)) / p.total else 15
+        3 -> 88
+        else -> 96
+    }
+    BitRuntimeContext.onProcessProgress(percentForContext, p.current.takeIf { p.total > 0 }, p.total.takeIf { it > 0 }, p.detail)
+    if (ghStage?.isAttachedToWindow != true || ghStepViews.size < 5) return
+    if (p.step < ghCurrentStep && store) return
+    ghCurrentStep = p.step
+    // Setelah tahap "Push", pembatalan tidak lagi aman/berguna.
+    if (p.step >= 3 && !ghCancelled) {
+        ghCancelBtn?.alpha = 0.4f
+        ghCancelBtn?.isEnabled = false
+        ghCancelBtn?.isClickable = false
+    }
+    for (i in 0..4) {
+        val state = when {
+            i < p.step -> StepStateView.DONE
+            i == p.step -> StepStateView.ACTIVE
+            else -> StepStateView.PENDING
+        }
+        ghStepViews[i].setState(state)
+        ghStepTitles[i].setTextColor(if (i <= p.step) ghInk else ghMuted)
+        if (i == p.step) ghStepTitles[i].setTypeface(null, android.graphics.Typeface.BOLD)
+        else ghStepTitles[i].setTypeface(null, android.graphics.Typeface.NORMAL)
+    }
+    if (p.step == 2 && p.total > 0) {
+        ghFileTotal = p.total
+        ghStepTitles[2].text = "Mengunggah file (${p.current}/${p.total})"
+    }
+    if (p.step > 2 && ghFileTotal > 0) {
+        ghStepTitles[2].text = "Mengunggah file ($ghFileTotal/$ghFileTotal)"
+        ghStepDetails[2].text = "$ghFileTotal file terunggah"
+        ghStepDetails[2].visibility = View.VISIBLE
+    }
+    if (p.detail.isNotBlank() && !(p.step == 2 && p.total == 0)) {
+        ghStepDetails[p.step].text = p.detail
+        ghStepDetails[p.step].visibility = View.VISIBLE
+    }
+    val pct = when (p.step) {
+        0 -> 4
+        1 -> 12
+        2 -> if (p.total > 0) 15 + (70 * (p.current - 1).coerceAtLeast(0)) / p.total else 15
+        3 -> 88
+        else -> 96
+    }
+    ghRing?.let { it.indeterminate = false; it.setProgress(pct.toFloat()) }
+    ghPercentText?.text = "$pct%"
+}
+
+internal fun MainActivity.ghOpenConnectionSettings() {
+    runCatching {
+        startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+    }.onFailure {
+        runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) }.logFailure("gh.openSettings")
+    }
+}
+
+internal fun MainActivity.ghShowFailure(error: Throwable) {
+    if (ghStage?.isAttachedToWindow != true) return
+    val failedStep = ghCurrentStep.coerceIn(0, 4)
+    if (ghStepViews.size == 5) {
+        ghStepViews[failedStep].setState(StepStateView.FAILED)
+        ghStepTitles[failedStep].setTextColor(ghDanger)
+    }
+    ghRing?.let { it.indeterminate = false; it.ringColor = ghDanger }
+    ghNoteBox?.visibility = View.GONE
+    val host = ghErrorHost ?: return
+    host.removeAllViews()
+
+    val tokenError = ghIsTokenAuthError(error)
+    val networkError = ghIsNetworkError(error)
+    val title = when {
+        tokenError -> "Token GitHub perlu diperbarui"
+        networkError -> "Tidak ada koneksi internet"
+        else -> "Upload gagal"
+    }
+    val message = when {
+        tokenError -> "GitHub menolak token yang digunakan (HTTP 401). Token bisa kedaluwarsa, dicabut, atau tidak valid. Perbarui token GitHub lalu coba upload lagi."
+        networkError -> "GITLS tidak dapat terhubung ke GitHub. Periksa koneksi internet/Wi-Fi Anda, lalu coba lagi.\n\nJika jaringan sudah aktif tetapi tetap gagal, coba buka pengaturan koneksi dan pastikan internet dapat digunakan."
+        else -> ghFriendlyError(error)
+    }
+    showGhBitProcessError(title, message)
+
+    val card = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(14), dp(16), dp(14))
+        background = ghRound(ghCard, 16, ghDanger)
+    }
+    card.addView(ghText(title, 15f, ghDanger, true))
+    card.addView(ghText(message, 12.5f, ghMuted).apply { setPadding(0, dp(6), 0, 0); setLineSpacing(0f, 1.15f) })
+    host.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+    if (tokenError) {
+        host.addView(ghPrimaryButton("Perbarui token GitHub") {
+            ghShow(ghSettingsScreen(), "Pengaturan GitHub")
+        })
+        host.addView(ghOutlineButton("Coba lagi", "refresh") { ghRetry?.invoke() })
+    } else if (networkError) {
+        host.addView(ghPrimaryButton("Cek koneksi internet") { ghOpenConnectionSettings() })
+        host.addView(ghOutlineButton("Coba lagi", "refresh") { ghRetry?.invoke() })
+    } else {
+        host.addView(ghPrimaryButton("Coba lagi") { ghRetry?.invoke() })
+        host.addView(ghOutlineButton("Ubah pengaturan", "cog-outline") { ghShow(ghSettingsScreen(), "Pengaturan GitHub") })
+    }
+    host.alpha = 0f
+    host.animate().alpha(1f).setDuration(240).start()
+    toast(title)
+}
+
+// =====================================================================
+// Layar 3: Upload Selesai
+// =====================================================================
+internal fun MainActivity.ghShowResult(result: GhResult) {
+    if (ghStage?.isAttachedToWindow != true) return
+    bitProcessErrorView?.let { it.animate().cancel(); it.visibility = View.GONE }
+    bitProcessFace?.let {
+        it.cancelAnimation()
+        it.setMinAndMaxFrame(0, 108)
+        it.repeatCount = LottieDrawable.INFINITE
+        it.playAnimation()
+    }
+    ghLastResult = result
+    val elapsed = if (ghFinishedSec >= 0) ghFinishedSec else ((SystemClock.elapsedRealtime() - ghStartedAt) / 1000L).toInt()
+    val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(2), dp(2), dp(2), dp(10)) }
+
+    val badge = SuccessBadgeView(this).apply { inkColor = ghInk; onInkColor = ghOnInk }
+    screen.addView(badge, LinearLayout.LayoutParams(dp(82), dp(82)).apply { bottomMargin = dp(8) })
+
+    // Success title: always centered directly beneath the check badge.
+    screen.addView(ghText("Upload Berhasil!", 24f, ghInk, true).apply {
+        gravity = Gravity.CENTER
+        textAlignment = View.TEXT_ALIGNMENT_CENTER
+    }, LinearLayout.LayoutParams(-1, -2).apply {
+        gravity = Gravity.CENTER_HORIZONTAL
+    })
+
+    val subtitle = if (result.createdRepo) "Repository baru dibuat (${if (result.createdPrivate) "private" else "public"}) dan project berhasil diunggah."
+    else "Project berhasil diunggah ke GitHub"
+    screen.addView(ghText(subtitle, 13f, ghMuted).apply {
+        gravity = Gravity.CENTER
+        textAlignment = View.TEXT_ALIGNMENT_CENTER
+        setPadding(dp(20), dp(3), dp(20), 0)
+        setLineSpacing(0f, 1.15f)
+    }, LinearLayout.LayoutParams(-1, -2).apply {
+        gravity = Gravity.CENTER_HORIZONTAL
+    })
+
+    val card = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(6), dp(16), dp(6))
+        background = ghRound(ghCard, 20, ghStroke)
+    }
+    fun infoRow(iconName: String, labelText: String, valueText: String, trailing: String? = null, onClick: (() -> Unit)? = null, last: Boolean = false) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, dp(10))
+        }
+        row.addView(ghIcon(iconName, 22f, ghInk), LinearLayout.LayoutParams(dp(30), dp(30)).apply { rightMargin = dp(14) })
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(ghText(labelText, 11.5f, ghMuted))
+        col.addView(ghText(valueText, 15f, ghInk, true).apply { setPadding(0, dp(3), 0, 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+        row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+        if (trailing != null) row.addView(ghIcon(trailing, 19f, ghMuted), LinearLayout.LayoutParams(dp(26), dp(26)))
+        if (onClick != null) ghPressable(row, onClick)
+        card.addView(row)
+        if (!last) card.addView(View(this).apply { setBackgroundColor(ghStroke) }, LinearLayout.LayoutParams(-1, dp(1)).apply { leftMargin = dp(44) })
+    }
+    infoRow("source-repository", "Repository", "${result.owner}/${result.repo}", "open-in-new", { ghOpenUrl(result.url) })
+    infoRow("source-branch", "Branch", result.branch)
+    infoRow("file-tree-outline", "Total File", "${result.files} file")
+    infoRow("harddisk", "Ukuran", ghFormatBytes(result.bytes))
+    infoRow("source-commit", "Commit", result.commitSha.take(7), "content-copy", {
+        ghCopy("Commit SHA", result.commitSha); toast("SHA commit disalin")
+    })
+    infoRow("timer-outline", "Durasi", if (elapsed >= 60) "${elapsed / 60} mnt ${elapsed % 60} dtk" else "$elapsed dtk", last = true)
+    screen.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14); bottomMargin = dp(12) })
+
+    screen.addView(ghPrimaryButton("Lihat di GitHub") { ghOpenUrl(result.url + "/tree/" + result.branch) })
+    if (result.workflowFiles.isNotEmpty()) {
+        screen.addView(ghOutlineButton("Cek GitHub Actions", "play-circle-outline") { ghShowActionsScreen(result) })
+        screen.addView(ghText("Workflow terdeteksi: ${result.workflowFiles.joinToString(", ")}", 11f, ghMuted).apply {
+            setPadding(dp(4), dp(5), dp(4), dp(8)); setLineSpacing(0f, 1.1f)
+        })
+    }
+    screen.addView(ghOutlineButton("Upload Lagi", "upload-network") { ghShow(ghSettingsScreen(), "Pengaturan GitHub") })
+    screen.addView(ghOutlineButton("Salin tautan repository", "link-variant") { ghCopy("Repository", result.url); toast("Tautan disalin") })
+
+    ghShow(screen, "Upload Selesai")
+    badge.postDelayed({ badge.play() }, 120L)
+    screen.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    toast("Upload GitHub selesai")
+}
+
+// =====================================================================
+// GitHub Actions Monitor: tampilkan urutan langkah, bukan log/code mentah.
+// =====================================================================
+internal fun MainActivity.ghShowActionsScreen(result: GhResult) {
+    ghActionPoll?.removeCallbacksAndMessages(null)
+    val screen = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(4), dp(10), dp(4), dp(24))
+    }
+    val header = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(14), dp(16), dp(14))
+        background = ghRound(ghSoft, 18)
+    }
+    header.addView(ghText("GitHub Actions", 18f, ghInk, true))
+    header.addView(ghText("GITLS hanya menampilkan urutan proses dan status. Baris kode/log panjang tidak ditampilkan.", 11.5f, ghMuted).apply { setPadding(0, dp(5), 0, 0); setLineSpacing(0f, 1.1f) })
+    screen.addView(header, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
+    val target = ghText("${result.owner}/${result.repo} • ${result.branch}", 12f, ghMuted, true)
+    screen.addView(target, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(4); rightMargin = dp(4); bottomMargin = dp(10) })
+    val host = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    screen.addView(host, LinearLayout.LayoutParams(-1, 0, 1f))
+    screen.addView(ghOutlineButton("Buka Actions di GitHub", "open-in-new") { ghOpenUrl("${result.url}/actions") })
+    screen.addView(ghOutlineButton("Kembali", "arrow-left") { ghShowResult(result) })
+    ghShow(screen, "Cek Actions")
+
+    // Status memakai StepStateView yang sama dengan layar Proses Upload:
+    // pending = cincin abu-abu, running = cincin hitam berputar, selesai = lingkaran hitam + centang
+    // yang digambar, gagal = lingkaran merah + silang.
+    // View dipakai ulang antar polling supaya putaran tidak reset dan animasi centang hanya
+    // diputar saat status benar-benar berubah (bukan setiap 3 detik).
+    val stateViews = HashMap<String, StepStateView>()
+
+    fun stateOf(c: String?): Int = when (c) {
+        "success", "completed", "neutral" -> StepStateView.DONE
+        "failure", "cancelled", "timed_out", "startup_failure" -> StepStateView.FAILED
+        "in_progress" -> StepStateView.ACTIVE
+        else -> StepStateView.PENDING
+    }
+
+    fun stateView(key: String, state: Int): StepStateView {
+        val existing = stateViews[key]
+        val v = existing ?: StepStateView(this).apply {
+            inkColor = ghInk; onInkColor = ghOnInk; mutedColor = ghStroke; dangerColor = ghDanger
+            stateViews[key] = this
+        }
+        (v.parent as? ViewGroup)?.removeView(v)
+        // View baru langsung tampil di status akhirnya; hanya perubahan status yang dianimasikan.
+        v.setState(state, existing != null)
+        return v
+    }
+
+    fun runningStatusRow(message: String, bottomDp: Int = 12): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(bottomDp))
+            addView(stateView("run-status", StepStateView.ACTIVE), LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(10) })
+            addView(ghText(message, 12f, ghInk, true).apply {
+                setLineSpacing(0f, 1.05f)
+            })
+        }
+    }
+
+    fun stepRow(jobId: Long, index: Int, name: String, conclusion: String?): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(3), 0, dp(3))
+        }
+        if (conclusion == "skipped") {
+            row.addView(ghText("–", 12f, ghMuted, true).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(10) })
+            row.addView(ghText(name, 11.5f, ghMuted))
+            return row
+        }
+        val st = stateOf(conclusion)
+        row.addView(stateView("$jobId#$index", st), LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(10) })
+        row.addView(ghText(name, 11.5f, if (st == StepStateView.PENDING) ghMuted else ghInk).apply {
+            if (st == StepStateView.ACTIVE) setTypeface(null, android.graphics.Typeface.BOLD)
+        })
+        return row
+    }
+
+    fun render(message: String, jobs: List<GhActionJob> = emptyList(), runUrl: String = "", running: Boolean = true) {
+        host.removeAllViews()
+        if (running) {
+            host.addView(runningStatusRow(message))
+        } else {
+            host.addView(ghText(message, 12f, ghMuted).apply { setPadding(dp(4), dp(4), dp(4), dp(12)) })
+        }
+        if (runUrl.isNotBlank()) host.addView(ghText("Run ditemukan", 13f, ghInk, true).apply { setPadding(dp(4), 0, dp(4), dp(8)) })
+        jobs.forEach { job ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = ghRound(ghCard, 15, ghStroke)
+            }
+            val jobState = job.conclusion?.let { stateOf(it) }
+                ?: if (job.status == "in_progress") StepStateView.ACTIVE else StepStateView.PENDING
+            val titleRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            titleRow.addView(stateView("job-${job.id}", jobState), LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(10) })
+            titleRow.addView(ghText(job.name, 14f, ghInk, true))
+            row.addView(titleRow)
+            if (job.steps.isEmpty()) {
+                row.addView(ghText(job.status, 11.5f, ghMuted).apply { setPadding(dp(0), dp(6), dp(0), dp(0)) })
+            } else {
+                val stepBox = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(0, dp(6), 0, 0)
+                }
+                job.steps.forEachIndexed { idx, (n, c) -> stepBox.addView(stepRow(job.id, idx, n, c)) }
+                row.addView(stepBox)
+            }
+            if (job.conclusion == "failure" || job.conclusion == "cancelled") {
+                ghActionLastFailedJob = job
+                row.addView(ghOutlineButton("Salin kesalahan", "content-copy") { ghCopy("GitHub Actions", "${job.name}\nStatus: ${job.conclusion}\n" + job.steps.joinToString("\n") { "${it.first}: ${it.second ?: ""}" }); toast("Ringkasan disalin") }.apply { setPadding(0, dp(8), 0, 0) })
+                row.addView(ghOutlineButton("Download log gagal", "download") { ghDownloadActionLog(result, job) }.apply { setPadding(0, dp(4), 0, 0) })
+            }
+            host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        }
+        if (!running && jobs.any { it.conclusion == "failure" || it.conclusion == "cancelled" }) {
+            host.addView(ghText("Actions gagal. Periksa langkah bertanda ✕. Kamu bisa menyalin ringkasannya atau mengunduh log untuk pemeriksaan lebih lanjut.", 12f, ghMuted).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); setLineSpacing(0f, 1.1f) })
+        }
+    }
+
+    fun poll() {
+        thread {
+            try {
+                val headers = ghHeaders(ghTokenValue)
+                val base = "https://api.github.com/repos/${Uri.encode(result.owner)}/${Uri.encode(result.repo)}"
+                val runs = githubRequestRetry("GET", "$base/actions/runs?branch=${Uri.encode(result.branch)}&per_page=10", null, headers)
+                val arr = runs.optJSONArray("workflow_runs") ?: JSONArray()
+                var run: JSONObject? = null
+                for (i in 0 until arr.length()) {
+                    val candidate = arr.optJSONObject(i) ?: continue
+                    if (candidate.optString("head_sha") == result.commitSha) { run = candidate; break }
+                }
+                if (run == null) {
+                    runOnUiThread { render("Workflow terdeteksi, tetapi GitHub belum membuat run. Menunggu…") }
+                    ghActionPoll?.postDelayed(ghActionRunnable!!, 3000L)
+                    return@thread
+                }
+                val currentRun = run
+                val runId = currentRun.optLong("id")
+                val runUrl = currentRun.optString("html_url")
+                val jobsJson = githubRequestRetry("GET", "$base/actions/runs/$runId/jobs?per_page=100", null, headers)
+                val jobsArr = jobsJson.optJSONArray("jobs") ?: JSONArray()
+                val jobs = mutableListOf<GhActionJob>()
+                for (i in 0 until jobsArr.length()) {
+                    val j = jobsArr.optJSONObject(i) ?: continue
+                    val stepsArr = j.optJSONArray("steps") ?: JSONArray()
+                    val steps = mutableListOf<Pair<String,String?>>()
+                    for (k in 0 until stepsArr.length()) {
+                        val st = stepsArr.optJSONObject(k) ?: continue
+                        // Selesai -> conclusion; belum selesai -> status ("in_progress" / "pending").
+                        steps += st.optString("name") to st.optString("conclusion").ifBlank { st.optString("status").ifBlank { null } }
+                    }
+                    jobs += GhActionJob(j.optLong("id"), j.optString("name", "Job"), j.optString("status"), j.optString("conclusion").ifBlank { null }, steps, j.optString("html_url"))
+                }
+                val completed = currentRun.optString("status") == "completed"
+                runOnUiThread { render(if (completed) "Actions selesai." else "Actions sedang berjalan…", jobs, runUrl, !completed) }
+                if (!completed) ghActionPoll?.postDelayed(ghActionRunnable!!, 3000L) else ghActionPollWanted = false
+            } catch (e: Throwable) {
+                val raw = e.message.orEmpty()
+                val message = when {
+                    raw.contains("HTTP 401", true) -> "Token GitHub tidak valid atau kedaluwarsa. Perbarui token lalu cek Actions lagi."
+                    raw.contains("HTTP 403", true) -> "Token berhasil dipakai untuk repository, tetapi akses GitHub Actions ditolak. Pastikan token memiliki izin Actions: Read."
+                    ghIsNetworkError(e) -> "Tidak ada koneksi internet. Periksa Wi-Fi/data lalu coba lagi."
+                    else -> ghFriendlyError(e)
+                }
+                runOnUiThread { render("Belum bisa membaca Actions: $message") }
+                ghActionPoll?.postDelayed(ghActionRunnable!!, 5000L)
+            }
+        }
+    }
+    ghActionPoll = Handler(Looper.getMainLooper())
+    ghActionRunnable = Runnable { poll() }
+    ghActionPollWanted = true
+    poll()
+}
+
+internal fun MainActivity.ghDownloadActionLog(result: GhResult, job: GhActionJob) {
+    thread {
+        try {
+            val url = "https://api.github.com/repos/${Uri.encode(result.owner)}/${Uri.encode(result.repo)}/actions/jobs/${job.id}/logs"
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"; connectTimeout = 20000; readTimeout = 60000
+                ghHeaders(ghTokenValue).forEach { (k,v) -> setRequestProperty(k,v) }
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val err = conn.errorStream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+                throw IOException("GitHub HTTP $code: ${err.take(240)}")
+            }
+            val contentType = conn.contentType.orEmpty().lowercase()
+            val out = File(getExternalFilesDir(null), "GITLS_Actions_Failed_${job.id}.zip")
+            out.parentFile?.mkdirs()
+            val tmp = File(out.parentFile, out.name + ".part")
+            var head = ByteArray(0)
+            try {
+                conn.inputStream.use { input ->
+                    FileOutputStream(tmp).use { os ->
+                        val buf = ByteArray(16 * 1024)
+                        var first = true
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            if (first && n > 0) { head = buf.copyOf(minOf(n, 4)); first = false }
+                            os.write(buf, 0, n)
+                        }
+                    }
+                }
+            } finally { conn.disconnect() }
+            // Endpoint job logs mengembalikan arsip; jangan simpan error JSON/HTML sebagai .zip.
+            val looksLikeZip = head.size >= 4 && head[0] == 0x50.toByte() && head[1] == 0x4b.toByte() &&
+                (head[2] == 0x03.toByte() || head[2] == 0x05.toByte() || head[2] == 0x07.toByte()) &&
+                (head[3] == 0x04.toByte() || head[3] == 0x06.toByte() || head[3] == 0x08.toByte())
+            if (!(looksLikeZip || contentType.contains("zip") || contentType.contains("octet-stream"))) {
+                tmp.delete()
+                throw IllegalArgumentException("GitHub tidak mengembalikan file log ZIP yang valid")
+            }
+            out.delete()
+            if (!tmp.renameTo(out)) { tmp.copyTo(out, overwrite = true); tmp.delete() }
+            runOnUiThread { toast("Log gagal disimpan: ${out.name}"); shareFile(out) }
+        } catch (e: Throwable) {
+            runOnUiThread { toast("Gagal download log: ${ghFriendlyError(e)}") }
+        }
+    }
+}
+
+internal fun MainActivity.ghOpenUrl(url: String) {
+    runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.logFailure("gh.openUrl")
+        .onFailure { toast("Tidak ada aplikasi untuk membuka tautan") }
+}
+
+internal fun MainActivity.ghCopy(labelText: String, value: String) {
+    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText(labelText, value))
+}
+
+internal fun MainActivity.prepareGithubZipPreview(uri: Uri) {
+    toolThread {
+        val result = runCatching {
+            val workDir = File(cacheDir, "github_preview_${System.currentTimeMillis()}").apply { mkdirs() }
+            try {
+                val zipFile = File(workDir, "preview.zip")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(zipFile).use { output -> input.copyTo(output) }
+                } ?: error("ZIP tidak dapat dibaca")
+                val extracted = File(workDir, "src").apply { mkdirs() }
+                unzipSafeForGithub(zipFile, extracted)
+                analyzeGithubZip(extracted)
+            } finally {
+                workDir.deleteRecursively()
+            }
+        }
+        runOnUiThread {
+            result.onSuccess { analysis ->
+                githubZipPreviewFiles = analysis.files
+                githubZipPreviewDirs = analysis.dirs
+                githubZipExcluded.clear()
+                githubZipExcluded.addAll(analysis.excludedDefaults)
+                githubZipRoot = analysis.suggestedRoot
+                githubZipUploadSummary()
+                githubUploadStatus?.text = "ZIP dianalisis: ${analysis.files.size} file. Root: ${if (analysis.suggestedRoot.isBlank()) "/" else analysis.suggestedRoot + "/"}"
+            }.onFailure { e ->
+                githubUploadStatus?.text = "Analisis ZIP gagal: ${e.message ?: "Unknown error"}"
+            }
+        }
+    }
+}
+
+internal fun MainActivity.githubZipUploadSummary() {
+    val root = githubZipRoot.trim('/').trim()
+    val count = githubZipPreviewFiles.count { path ->
+        !githubZipExcluded.any { excluded -> path == excluded || path.startsWith("$excluded/") } &&
+        (root.isBlank() || path == root || path.startsWith("$root/"))
+    }
+    githubUploadStatus?.text = "Siap: $count file akan di-upload • Root: ${if (root.isBlank()) "/" else root + "/"} • Exclude: ${githubZipExcluded.size}"
+}
+
+internal fun MainActivity.showGithubZipPreview(uri: Uri) {
+    if (githubZipPreviewFiles.isEmpty()) {
+        githubUploadStatus?.text = "Menganalisis ZIP..."
+        prepareGithubZipPreview(uri)
+        return
+    }
+
+    val box = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(28, 8, 28, 8)
+    }
+    val rootLabel = TextView(this).apply {
+        text = "Repository root"
+        textSize = 13f
+        setTextColor(textMuted)
+    }
+    box.addView(rootLabel)
+
+    val rootSpinner = Spinner(this).apply {
+        background = ghRound(ghSoft, 14, ghStroke)
+        setPadding(dp(12), dp(4), dp(12), dp(4))
+    }
+    val roots = listOf("/ (root ZIP)") + githubZipPreviewDirs.map { "$it/" }
+    val currentRoot = githubZipRoot.trim('/').let { if (it.isBlank()) "/ (root ZIP)" else "$it/" }
+    val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, roots)
+    rootSpinner.adapter = adapter
+    rootSpinner.setSelection(maxOf(0, roots.indexOf(currentRoot)))
+    rootSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+        override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+            githubZipRoot = if (position == 0) "" else roots[position].trimEnd('/')
+            githubZipUploadSummary()
+        }
+    }
+    box.addView(rootSpinner)
+    box.addView(subLabel("Folder pembungkus otomatis dideteksi. Pilih folder yang akan menjadi root repository. Tombol × mengecualikan file/folder dari upload.", 11f))
+
+    val scroll = ScrollView(this)
+    val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    githubZipPreviewFiles.forEach { path ->
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(5), dp(8), dp(5))
+            background = ghRound(ghCard, 12, ghStroke)
+        }
+        val label = TextView(this).apply {
+            text = if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) "⊘ $path" else "• $path"
+            textSize = 12f
+            setTextColor(if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) textMuted else textMain)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val remove = TextView(this).apply {
+            text = if (githubZipExcluded.contains(path)) "✓" else "×"
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setPadding(18, 8, 12, 8)
+        }
+        remove.setOnClickListener {
+            if (githubZipExcluded.contains(path)) githubZipExcluded.remove(path) else githubZipExcluded.add(path)
+            label.text = if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) "⊘ $path" else "• $path"
+            label.setTextColor(if (githubZipExcluded.any { ex -> path == ex || path.startsWith("$ex/") }) textMuted else textMain)
+            remove.text = if (githubZipExcluded.contains(path)) "✓" else "×"
+            githubZipUploadSummary()
+        }
+        row.addView(label)
+        row.addView(remove)
+        list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+    }
+    scroll.addView(list)
+    val previewHeight = (420 * resources.displayMetrics.density).roundToInt()
+    box.addView(scroll, LinearLayout.LayoutParams(-1, previewHeight))
+
+    AlertDialog.Builder(this)
+        .setTitle("Isi ZIP • ${githubZipPreviewFiles.size} file")
+        .setView(box)
+        .setNegativeButton("Tutup", null)
+        .setPositiveButton("Simpan Pilihan", null)
+        .show().also { ghStyleRoundedDialog(it, 24) }
+}
+
+internal fun MainActivity.uploadZipToGitHub(
+    uri: Uri,
+    owner: String,
+    repo: String,
+    token: String,
+    branch: String,
+    commitMessage: String,
+    uploadRoot: String,
+    excludedPaths: Set<String>,
+    createPrivate: Boolean,
+    progress: (GhProgress) -> Unit
+): GhResult {
+    val workDir = File(cacheDir, "github_zip_${System.currentTimeMillis()}").apply { mkdirs() }
+    val zipFile = File(workDir, "upload.zip")
+    try {
+        progress(GhProgress(0, "Membaca file ZIP…"))
+        contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(zipFile).use { output -> input.copyTo(output) }
+        } ?: error("ZIP tidak dapat dibaca")
+        progress(GhProgress(0, "Mengekstrak ZIP…"))
+        val extracted = File(workDir, "src").apply { mkdirs() }
+        unzipSafeForGithub(zipFile, extracted)
+
+        val rootPath = uploadRoot.trim('/').trim()
+        val files = extracted.walkTopDown()
+            .filter { it.isFile }
+            .map { f -> extracted.toPath().relativize(f.toPath()).toString().replace(File.separatorChar, '/') to f }
+            .filter { (rel, _) ->
+                val inRoot = rootPath.isBlank() || rel == rootPath || rel.startsWith("$rootPath/")
+                val relativeForExclude = if (rootPath.isBlank()) rel else rel.removePrefix("$rootPath/")
+                val excluded = excludedPaths.any { ex ->
+                    val normalized = ex.trim('/').replace('\\', '/')
+                    rel == normalized || rel.startsWith("$normalized/") ||
+                        relativeForExclude == normalized || relativeForExclude.startsWith("$normalized/")
+                }
+                inRoot && !excluded &&
+                    !rel.startsWith(".git/") && !rel.startsWith("__MACOSX/") &&
+                    rel != ".git" && rel != "__MACOSX" &&
+                    rel != ".DS_Store" && !rel.endsWith("/.DS_Store") &&
+                    rel != "Thumbs.db" && !rel.endsWith("/Thumbs.db")
+            }
+            .map { (rel, f) -> (if (rootPath.isBlank()) rel else rel.removePrefix("$rootPath/")) to f }
+            .toList()
+        require(files.isNotEmpty()) { "Tidak ada file yang tersisa untuk di-upload dari root yang dipilih" }
+        require(files.size <= 3000) { "ZIP terlalu banyak file (maksimal 3000)" }
+        return pushFilesToGitHub(files, owner, repo, token, branch, commitMessage, createPrivate, progress)
+    } finally {
+        workDir.deleteRecursively()
+    }
+}
