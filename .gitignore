@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+.kotlin/
+**/build/
+
+# Android Studio / AndroidIDE
+.idea/
+*.iml
+local.properties
+
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Signing / secrets
+*.jks
+*.keystore
+*.p12
+*.pem
+.env
+.env.*
+
+# Logs
+*.log
+
+# Generated reports
+reports/
