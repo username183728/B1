@@ -6637,10 +6637,10 @@ class MainActivity : Activity() {
         }
     }
 
-    internal fun csvEscape(value: String): String = "\"" + value.replace("\"", "\"\"") + "\""
+    internal fun csvQuote(value: String): String = "\"" + value.replace("\"", "\"\"") + "\""
 
     internal fun tableToCsv(table: List<List<String>>): String =
-        table.joinToString("\n") { row -> row.joinToString(",") { csvEscape(it) } }
+        table.joinToString("\n") { row -> row.joinToString(",") { csvQuote(it) } }
 
     internal fun xmlEscape(value: String): String = value
         .replace("&", "&amp;")
@@ -6698,7 +6698,7 @@ class MainActivity : Activity() {
         row ?: return
         row.removeAllViews()
         val values = linkedMapOf(
-            "URL" to Regex("https?://[^\s]+", RegexOption.IGNORE_CASE).findAll(text).count(),
+            "URL" to Regex("https?://[^\\s]+", RegexOption.IGNORE_CASE).findAll(text).count(),
             "Email" to Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}").findAll(text).count(),
             "IP" to Regex("\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b").findAll(text).count(),
             "Angka" to Regex("\\b\\d+\\b").findAll(text).count()
