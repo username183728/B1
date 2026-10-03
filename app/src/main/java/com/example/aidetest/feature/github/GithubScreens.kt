@@ -869,7 +869,7 @@ internal fun MainActivity.ghBitProcessAssistant(): FrameLayout {
     }
 
     val face = LottieAnimationView(this).apply {
-        setAnimation("bit_idle.json")
+        setAnimation("bit/bit_idle.json")
         repeatMode = LottieDrawable.RESTART
         repeatCount = LottieDrawable.INFINITE
         setMinAndMaxFrame(0, 450)

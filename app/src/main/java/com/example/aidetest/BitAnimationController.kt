@@ -175,7 +175,7 @@ internal class BitAnimationController(private val activity: MainActivity) : Sens
     }
 
     private fun loadIdle(face: LottieAnimationView) {
-        face.setAnimation("bit_idle.json")
+        face.setAnimation("bit/bit_idle.json")
         activity.applyBitFaceTheme(face)
         face.setMinAndMaxFrame(0, 450)
     }
@@ -188,7 +188,7 @@ internal class BitAnimationController(private val activity: MainActivity) : Sens
         if (face == null || !faces.contains(face) || myToken != token) return
         face.removeAllAnimatorListeners()
         face.cancelAnimation()
-        face.setAnimation(asset)
+        face.setAnimation("bit/$asset")
         activity.applyBitFaceTheme(face)
         face.repeatCount = 0
         face.setMinAndMaxFrame(start, end)

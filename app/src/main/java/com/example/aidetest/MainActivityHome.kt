@@ -944,7 +944,7 @@ internal fun MainActivity.setupBitFace() {
         label.setTextColor(if (isDarkTheme) Color.rgb(155, 155, 160) else Color.rgb(138, 150, 163))
 
         val view = LottieAnimationView(this).apply {
-            setAnimation("bit_idle.json")
+            setAnimation("bit/bit_idle.json")
             repeatMode = LottieDrawable.RESTART
             repeatCount = LottieDrawable.INFINITE
             setMinAndMaxFrame(0, 450)
@@ -1009,7 +1009,7 @@ internal fun MainActivity.setupBitChatTopFace() {
     }
     val top = topBar
     val view = LottieAnimationView(this).apply {
-        setAnimation("bit_idle.json")
+        setAnimation("bit/bit_idle.json")
         repeatMode = LottieDrawable.RESTART
         repeatCount = LottieDrawable.INFINITE
         setMinAndMaxFrame(0, 450)
