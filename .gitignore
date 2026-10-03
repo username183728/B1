@@ -1,13 +1,4 @@
-.gradle/
-.kotlin/
-**/build/
-.idea/
-*.iml
-local.properties
 *.jks
 *.keystore
 *.p12
-*.pem
-.env
-*.log
-.DS_Store
+release.keystore
