@@ -48,6 +48,20 @@ android {
             def keyAliasValue = System.getenv("ANDROID_KEY_ALIAS") ?: signingProps.getProperty("keyAlias")
             def keyPasswordValue = System.getenv("ANDROID_KEY_PASSWORD") ?: signingProps.getProperty("keyPassword")
 
+            // Uploader (GITLS Updater / GitHub Publisher) menyaring file *.keystore, dan workflow
+            // lama (mis. build.yml) tidak memulihkannya. Pulihkan di sini, sehingga APAPUN workflow
+            // yang menjalankan Gradle tetap menemukan keystore TEST yang sama (byte-identik).
+            // Hanya berlaku untuk keystore bawaan repo, bukan untuk ANDROID_KEYSTORE_PATH (secrets).
+            if (storePath && envStorePath == null) {
+                def bundledStore = rootProject.file(storePath)
+                def bundledB64 = rootProject.file(storePath + ".b64")
+                if (!bundledStore.exists() && bundledB64.exists()) {
+                    bundledStore.parentFile.mkdirs()
+                    bundledStore.bytes = java.util.Base64.getMimeDecoder().decode(bundledB64.text.trim())
+                    logger.lifecycle("Keystore TEST dipulihkan dari ${bundledB64.name}")
+                }
+            }
+
             if (storePath && storePasswordValue && keyAliasValue && keyPasswordValue) {
                 storeFile rootProject.file(storePath)
                 storePassword storePasswordValue
