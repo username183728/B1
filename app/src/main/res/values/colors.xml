@@ -1,0 +1,14 @@
+<resources>
+    <!-- Hitam-putih seperti app utama (terang) -->
+    <color name="bg">#FFFFFF</color>
+    <color name="card">#F5F5F7</color>
+    <color name="field">#FFFFFF</color>
+    <color name="line">#E1E6EB</color>
+    <color name="accent">#111113</color>
+    <color name="text">#0F0F10</color>
+    <color name="muted">#7B8794</color>
+    <color name="ok">#16803D</color>
+    <color name="warn">#B45309</color>
+    <color name="err">#B91C1C</color>
+    <color name="ic_bg">#111113</color>
+</resources>

@@ -1,0 +1,79 @@
+name: Build GITLS Uploader
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ '**' ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uploader-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Restore signing keystore (optional, from secrets)
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            {
+              echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore"
+              echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+              echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+              echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "Keystore tetap dipakai: update antar-build tidak perlu hapus-instal."
+          else
+            echo "Secret keystore tidak ada: APK memakai kunci debug acak (update bisa ditolak)."
+          fi
+
+      - name: Ensure Android SDK platform and build-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon --stacktrace -PversionCode=${{ github.run_number }} assembleDebug
+
+      - name: Prepare installable APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)
+          test -n "$apk"
+          cp "$apk" app/build/outputs/apk/debug/GITLS-Uploader-installable-debug.apk
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: GITLS-Uploader-installable-debug-apk
+          path: app/build/outputs/apk/debug/GITLS-Uploader-installable-debug.apk
+          if-no-files-found: error
+          retention-days: 14

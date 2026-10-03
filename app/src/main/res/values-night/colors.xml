@@ -1,0 +1,13 @@
+<resources>
+    <!-- Hitam-putih seperti app utama (gelap) -->
+    <color name="bg">#0A0A0B</color>
+    <color name="card">#161618</color>
+    <color name="field">#1C1C1F</color>
+    <color name="line">#303034</color>
+    <color name="accent">#F5F5F7</color>
+    <color name="text">#F5F5F7</color>
+    <color name="muted">#9B9BA0</color>
+    <color name="ok">#4AC978</color>
+    <color name="warn">#F5B342</color>
+    <color name="err">#FF6B6B</color>
+</resources>
