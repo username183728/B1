@@ -37,12 +37,22 @@ if grep -RInE --exclude-dir=.git --exclude='*.png' --exclude='*.jpg' \
   exit 1
 fi
 
-# Actual private-key files should never be committed.
-if find . -type f \( -name '*.jks' -o -name '*.keystore' -o -name '*.p12' -o -name '*.pem' \) \
-  -not -path './.git/*' -print -quit | grep -q .; then
-  echo "::error::Signing/private-key file found in repository."
+# TEST build exception: this repository intentionally bundles a dedicated
+# non-production signing key under signing/. Production repositories should
+# keep release signing keys outside source control.
+private_key_found=$(find . -type f \
+  \( -name '*.jks' -o -name '*.keystore' -o -name '*.p12' -o -name '*.pem' \) \
+  -not -path './.git/*' \
+  -not -path './signing/gitls-test.keystore' \
+  -print -quit || true)
+if [ -n "$private_key_found" ]; then
+  echo "::error::Unexpected signing/private-key file found: $private_key_found"
   exit 1
 fi
+
+test -s signing/gitls-test.keystore
+test -s signing/keystore.properties
+echo "Bundled TEST signing key: OK"
 
 # Basic XML validation for Android resources.
 python3 - <<'PY'

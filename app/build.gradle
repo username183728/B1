@@ -33,23 +33,37 @@ android {
 
     signingConfigs {
         release {
-            def storePath = System.getenv("ANDROID_KEYSTORE_PATH")
-            if (storePath) {
-                storeFile file(storePath)
-                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            // TEST BUILD: prefer CI environment values when present; otherwise use the
+            // bundled signing/keystore.properties file so GitHub Actions needs no Secrets.
+            def localSigningFile = rootProject.file("signing/keystore.properties")
+            def signingProps = new Properties()
+            if (localSigningFile.exists()) {
+                localSigningFile.withInputStream { signingProps.load(it) }
+            }
+
+            def envStorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+            def localStorePath = signingProps.getProperty("storeFile")
+            def storePath = envStorePath ?: localStorePath
+            def storePasswordValue = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: signingProps.getProperty("storePassword")
+            def keyAliasValue = System.getenv("ANDROID_KEY_ALIAS") ?: signingProps.getProperty("keyAlias")
+            def keyPasswordValue = System.getenv("ANDROID_KEY_PASSWORD") ?: signingProps.getProperty("keyPassword")
+
+            if (storePath && storePasswordValue && keyAliasValue && keyPasswordValue) {
+                storeFile rootProject.file(storePath)
+                storePassword storePasswordValue
+                keyAlias keyAliasValue
+                keyPassword keyPasswordValue
+            } else {
+                throw new GradleException("Release signing configuration is incomplete. Expected signing/keystore.properties or ANDROID_KEYSTORE_* environment variables.")
             }
         }
     }
 
     buildTypes {
         debug {
-            // Bila keystore tetap tersedia (CI dengan secrets), debug & release memakai tanda tangan yang sama
-            // sehingga pembaruan di tempat tidak gagal karena keystore debug acak per runner.
-            if (System.getenv("ANDROID_KEYSTORE_PATH")) {
-                signingConfig signingConfigs.release
-            }
+            // Test build: debug & release use the same stable key so repeated installs/updates
+            // from this test branch keep the same Android signing identity.
+            signingConfig signingConfigs.release
         }
         release {
             // R8 aktif untuk menghapus bytecode/resource yang benar-benar tidak digunakan.
@@ -58,9 +72,7 @@ android {
             // SourceFile/LineNumberTable tetap dipertahankan agar stack trace release terbaca.
             minifyEnabled true
             shrinkResources true
-            if (System.getenv("ANDROID_KEYSTORE_PATH")) {
-                signingConfig signingConfigs.release
-            }
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

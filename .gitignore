@@ -1,4 +1,9 @@
-*.jks
-*.keystore
-*.p12
-release.keystore
+# Gradle / build output
+.gradle/
+.kotlin/
+**/build/
+.idea/
+*.iml
+local.properties
+.DS_Store
+# Catatan: signing/gitls-test.keystore sengaja TIDAK di-ignore (build TEST).
