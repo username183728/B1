@@ -15,4 +15,6 @@
     <color name="mt_text_dark">#F5F5F7</color>
     <color name="mt_text_muted_dark">#9B9BA0</color>
     <color name="mt_line_dark">#303034</color>
+    <!-- Dipakai mipmap-anydpi-v26/ic_launcher.xml (adaptive icon) -->
+    <color name="ic_bg">#0A0A0B</color>
 </resources>

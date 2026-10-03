@@ -88,6 +88,47 @@ if bad:
 print("XML validation: OK")
 PY
 
+# Resource reference guard: gagal cepat (1 detik) dengan pesan jelas jika ada XML
+# yang merujuk resource lokal yang tidak ada, mis. file sisa dari upload lama
+# (uploader hanya menambah/menimpa file, tidak pernah menghapus).
+python3 - <<'PY'
+import pathlib, re, sys, xml.etree.ElementTree as ET
+res = pathlib.Path("app/src/main/res")
+defined = {}
+def add(t, n): defined.setdefault(t, set()).add(n.replace(".", "_"))
+for d in res.iterdir():
+    if not d.is_dir(): continue
+    kind = d.name.split("-")[0]
+    for f in d.iterdir():
+        if kind == "values":
+            if f.suffix != ".xml": continue
+            for e in ET.parse(f).getroot():
+                n = e.get("name")
+                if not n: continue
+                tag = e.get("type") if e.tag == "item" else e.tag
+                tag = {"string-array": "array", "integer-array": "array"}.get(tag, tag)
+                add(tag, n)
+        else:
+            add(kind, f.stem)
+for f in res.rglob("*.xml"):
+    for m in re.finditer(r"@\+id/(\w+)", f.read_text(encoding="utf-8")): add("id", m.group(1))
+LIB = ("abc_", "mtrl_", "material_", "m3_", "design_", "notification_", "tooltip_", "common_", "androidx_")
+CHECK = {"drawable", "mipmap", "color", "layout", "xml", "string", "dimen"}
+errors = []
+files = list(res.rglob("*.xml")) + [pathlib.Path("app/src/main/AndroidManifest.xml")]
+for f in files:
+    text = f.read_text(encoding="utf-8")
+    for m in re.finditer(r"@(?!\+|android:)(\w+)/([\w.]+)", text):
+        t, n = m.group(1), m.group(2).replace(".", "_")
+        if t in CHECK and not n.startswith(LIB) and n not in defined.get(t, set()):
+            line = text[:m.start()].count("\n") + 1
+            errors.append((str(f), line, f"@{t}/{m.group(2)}"))
+for f, line, ref in errors:
+    print(f"::error file={f},line={line}::Resource {ref} dirujuk tetapi tidak ada. Tambahkan resource-nya atau hapus/perbaiki file ini (mungkin file sisa dari upload lama).")
+if errors: sys.exit(1)
+print("Resource reference guard: OK")
+PY
+
 # Guard: `::lateinitProp.isInitialized` hanya valid di class pemilik properti.
 # Di file extension (MainActivity.xxx) ini bikin error kompilasi "Backing field ... is not accessible".
 # Gunakan accessor aman seperti `bitAnim` (lihat MainActivity.kt).
