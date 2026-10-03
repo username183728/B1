@@ -671,7 +671,12 @@ class MainActivity : Activity() {
         homeProfile.setOnClickListener { showProfile() }
         // Ghost button: tanpa container; ikon scale kecil + shadow tipis turun lalu kembali halus.
         Motion.press(homeMenu, 0.86f, shadowDp = -1f)
-        Motion.press(homeSearch, 0.86f, shadowDp = -1f, onRelease = { Motion.icon(homeSearch, Motion.Icon.SEARCH) })
+        Motion.press(homeSearch, 0.86f, shadowDp = -1f, onRelease = {
+            homeSearch.animate().cancel()
+            homeSearch.animate().rotationBy(360f).scaleX(1.06f).scaleY(1.06f).setDuration(260L).withEndAction {
+                homeSearch.animate().scaleX(1f).scaleY(1f).setDuration(100L).start()
+            }.start()
+        })
         Motion.press(homeProfile, 0.86f, shadowDp = -1f)
         Motion.press(back, 0.88f)
         Motion.press(action, 0.88f)

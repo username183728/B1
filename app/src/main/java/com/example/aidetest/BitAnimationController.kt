@@ -59,7 +59,7 @@ internal class BitAnimationController(private val activity: MainActivity) : Sens
         // played on the third tap, so the user never sees TAP -> BUMP.
         if (taps >= 3) {
             taps = 0
-            playBumpThenAngry()
+            playBump()
         } else {
             playTap(face)
         }
@@ -87,14 +87,11 @@ internal class BitAnimationController(private val activity: MainActivity) : Sens
         }
     }
 
-    private fun playBumpThenAngry() {
+    private fun playBump() {
         val myToken = ++token
         faces.forEach { face ->
             playAsset(face, "bit_bump.json", 480, 560, myToken) {
-                if (myToken != token) return@playAsset
-                playAsset(face, "bit_angry.json", 770, 830, myToken) {
-                    if (myToken == token) playIdle(face)
-                }
+                if (myToken == token) playIdle(face)
             }
         }
     }

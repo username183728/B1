@@ -3,19 +3,17 @@ package com.example.aidetest
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.util.AttributeSet
 import androidx.appcompat.widget.AppCompatTextView
+import com.airbnb.lottie.LottieAnimationView
+import com.airbnb.lottie.LottieCompositionFactory
+import com.airbnb.lottie.LottieDrawable
 
 /**
- * Tombol kanan-atas (menu/aksi). Setiap kali teksnya diset ke "⋮" (titik tiga),
- * tombol ini menggambar wajah bot Bit sebagai gantinya. Teks lain (mis. "+")
- * tetap tampil seperti biasa, sehingga semua `action.text = "⋮"` di project
- * otomatis berubah menjadi bot tanpa mengubah logika klik.
- *
- * Warna badan bot mengikuti warna teks tombol (diatur styleTopFabs sesuai tema),
- * warna mata dibalik agar selalu kontras.
+ * Animated Bit button used for the top-right action button.
+ * When its text is "⋮", the dots are replaced by the real Bit Lottie animation.
+ * The animation is transparent and follows the same theme/background as the page.
  */
 class BotMenuButton @JvmOverloads constructor(
     context: Context,
@@ -24,39 +22,143 @@ class BotMenuButton @JvmOverloads constructor(
 ) : AppCompatTextView(context, attrs, defStyleAttr) {
 
     private var botMode = false
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val eyeRect = RectF()
+    private var botDrawable: LottieDrawable? = null
+    private var botLoaded = false
+    private var taps = 0
+    private var lastTapAt = 0L
+    private var reactionToken = 0
+    private var resetRunnable: Runnable? = null
 
     override fun setText(text: CharSequence?, type: BufferType?) {
         val isBot = text?.toString()?.trim() == "⋮"
         botMode = isBot
         super.setText(if (isBot) "" else text, type)
+        if (isBot) {
+            ensureBotDrawable()
+            post { playIdle() }
+        } else {
+            botDrawable?.cancelAnimation()
+        }
         invalidate()
     }
 
+    override fun onDetachedFromWindow() {
+        resetRunnable?.let { removeCallbacks(it) }
+        botDrawable?.cancelAnimation()
+        botDrawable?.callback = null
+        super.onDetachedFromWindow()
+    }
+
+    override fun performClick(): Boolean {
+        if (botMode) playTapReaction()
+        return super.performClick()
+    }
+
     override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
+        if (!botMode) {
+            super.onDraw(canvas)
+            return
+        }
+        val d = botDrawable
+        if (d == null || !botLoaded) {
+            // Keep a clean fallback while the Lottie asset loads.
+            val cx = width / 2f
+            val cy = height / 2f
+            val r = minOf(width, height) * 0.31f
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            paint.color = currentTextColor
+            canvas.drawCircle(cx, cy, r, paint)
+            paint.color = if (currentTextColor == Color.WHITE) Color.rgb(20,20,26) else Color.WHITE
+            canvas.drawRoundRect(cx-r*0.5f, cy-r*0.25f, cx-r*0.15f, cy+r*0.25f, r*0.12f, r*0.12f, paint)
+            canvas.drawRoundRect(cx+r*0.15f, cy-r*0.25f, cx+r*0.5f, cy+r*0.25f, r*0.12f, r*0.12f, paint)
+            return
+        }
+        val size = minOf(width, height)
+        val left = (width - size) / 2
+        val top = (height - size) / 2
+        d.bounds = android.graphics.Rect(left, top, left + size, top + size)
+        d.draw(canvas)
+    }
+
+    private fun ensureBotDrawable() {
+        if (botDrawable != null) return
+        val drawable = LottieDrawable().apply {
+            repeatMode = LottieDrawable.RESTART
+            repeatCount = LottieDrawable.INFINITE
+            callback = this@BotMenuButton
+        }
+        botDrawable = drawable
+        LottieCompositionFactory.fromAsset(context, "bit/bit_idle.json")
+            .addListener { composition ->
+                drawable.setComposition(composition)
+                drawable.setMinAndMaxFrame(0, 450)
+                botLoaded = true
+                drawable.playAnimation()
+                invalidate()
+            }
+            .addFailureListener {
+                botLoaded = false
+                invalidate()
+            }
+    }
+
+    private fun playIdle() {
         if (!botMode) return
+        ensureBotDrawable()
+        val d = botDrawable ?: return
+        if (!botLoaded) return
+        reactionToken++
+        d.removeAllAnimatorListeners()
+        d.setMinAndMaxFrame(0, 450)
+        d.repeatCount = LottieDrawable.INFINITE
+        d.playAnimation()
+        invalidate()
+    }
 
-        val cx = width / 2f
-        val cy = height / 2f
-        val radius = minOf(width, height) * 0.31f
-        val body = currentTextColor or (0xFF shl 24)
-        val luminance = (0.299f * Color.red(body) + 0.587f * Color.green(body) + 0.114f * Color.blue(body)) / 255f
-        val eyes = if (luminance > 0.5f) Color.rgb(20, 20, 26) else Color.WHITE
+    private fun playTapReaction() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        taps = if (now - lastTapAt <= 1000L) taps + 1 else 1
+        lastTapAt = now
+        resetRunnable?.let { removeCallbacks(it) }
+        val r = Runnable { taps = 0 }
+        resetRunnable = r
+        postDelayed(r, 1400L)
 
-        paint.style = Paint.Style.FILL
-        paint.color = body
-        canvas.drawCircle(cx, cy, radius, paint)
+        if (taps >= 3) {
+            taps = 0
+            playSequence("bit_bump.json", 480, 560, null, 0, 0)
+        } else {
+            playSequence("bit_tap.json", 450, 480, null, 0, 0)
+        }
+    }
 
-        paint.color = eyes
-        val eyeW = radius * 0.24f
-        val eyeH = radius * 0.50f
-        val dx = radius * 0.38f
-        for (side in intArrayOf(-1, 1)) {
-            val ex = cx + side * dx
-            eyeRect.set(ex - eyeW / 2f, cy - eyeH / 2f, ex + eyeW / 2f, cy + eyeH / 2f)
-            canvas.drawRoundRect(eyeRect, eyeW / 2f, eyeW / 2f, paint)
+    private fun playSequence(first: String, firstStart: Int, firstEnd: Int, second: String?, secondStart: Int, secondEnd: Int) {
+        val d = botDrawable ?: return
+        if (!botLoaded) return
+        val my = ++reactionToken
+        d.cancelAnimation()
+        playAsset(d, first, firstStart, firstEnd, my) {
+            if (second != null && my == reactionToken && botMode) {
+                playAsset(d, second, secondStart, secondEnd, my) { if (my == reactionToken) playIdle() }
+            } else if (my == reactionToken) playIdle()
+        }
+    }
+
+    private fun playAsset(d: LottieDrawable, asset: String, start: Int, end: Int, token: Int, onEnd: () -> Unit) {
+        LottieCompositionFactory.fromAsset(context, "bit/$asset").addListener { composition ->
+            if (token != reactionToken || !botMode) return@addListener
+            d.setComposition(composition)
+            d.setMinAndMaxFrame(start, end)
+            d.repeatCount = 0
+            d.removeAllAnimatorListeners()
+            d.addAnimatorListener(object : android.animation.Animator.AnimatorListener {
+                override fun onAnimationStart(animation: android.animation.Animator) = Unit
+                override fun onAnimationCancel(animation: android.animation.Animator) = Unit
+                override fun onAnimationRepeat(animation: android.animation.Animator) = Unit
+                override fun onAnimationEnd(animation: android.animation.Animator) { if (token == reactionToken) onEnd() }
+            })
+            d.playAnimation()
+            invalidate()
         }
     }
 }

@@ -12,3 +12,5 @@ The app now uses separate Lottie JSON assets derived from `bit_face_v10.json`.
 - `bit_wink.json` — recovery / one-eye wink (900–940)
 
 The purple `BG (ungu)` Lottie layer is removed from the animation assets. The Android app background therefore shows through and follows the existing light/dark theme.
+
+`bit_angry.json` is intentionally not included or referenced. The 3-tap reaction ends at BUMP and returns to IDLE.

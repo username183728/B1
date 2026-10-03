@@ -237,6 +237,7 @@
 
                     <FrameLayout
                         android:id="@+id/navBotAnimationContainer"
+                        android:background="@android:color/transparent"
                         android:layout_width="46dp"
                         android:layout_height="46dp"
                         android:clipChildren="false"
