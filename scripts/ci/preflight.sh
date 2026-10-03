@@ -3,12 +3,25 @@ set -euo pipefail
 
 echo "== GITLS CI preflight =="
 
-test -f settings.gradle
-test -f build.gradle
-test -f gradle/wrapper/gradle-wrapper.properties
-test -x ./gradlew || chmod +x ./gradlew
-test -f app/build.gradle
-test -f app/src/main/AndroidManifest.xml
+req_file() {
+  if [ ! -f "$1" ]; then
+    echo "::error::File wajib tidak ditemukan di root repository: $1 (kemungkinan terlewat/terfilter saat upload atau project ada di subfolder)."
+    exit 1
+  fi
+}
+req_grep() {
+  if ! grep -q -e "$1" "$2"; then
+    echo "::error file=$2::Pola wajib tidak ditemukan di $2: $1"
+    exit 1
+  fi
+}
+
+req_file settings.gradle
+req_file build.gradle
+req_file gradle/wrapper/gradle-wrapper.properties
+[ -x ./gradlew ] || chmod +x ./gradlew
+req_file app/build.gradle
+req_file app/src/main/AndroidManifest.xml
 
 # Fail early if the repository was packaged one directory too deep.
 # GitHub Actions expects the Gradle project files at repository root.
@@ -18,15 +31,15 @@ if [ -f gitls_final_work/gradlew ] || [ -d gitls_final_work/app ]; then
 fi
 
 # Build-toolchain invariants used by this project.
-grep -q "distributionUrl=.*gradle-8\.11\.1-all\.zip" gradle/wrapper/gradle-wrapper.properties
-grep -q "com.android.tools.build:gradle:8\.10\.0" build.gradle
-grep -q "ext.kotlin_version = '2\.2\.21'" build.gradle
-grep -q "compileSdkVersion 36" app/build.gradle
-grep -q "targetSdkVersion 36" app/build.gradle
-grep -q "sourceCompatibility JavaVersion.VERSION_17" app/build.gradle
-grep -q "targetCompatibility JavaVersion.VERSION_17" app/build.gradle
-grep -q "JvmTarget.fromTarget(\"17\")" app/build.gradle
-grep -q "JavaLanguageVersion.of(17)" app/build.gradle
+req_grep "distributionUrl=.*gradle-8\.11\.1-all\.zip" gradle/wrapper/gradle-wrapper.properties
+req_grep "com.android.tools.build:gradle:8\.10\.0" build.gradle
+req_grep "ext.kotlin_version = '2\.2\.21'" build.gradle
+req_grep "compileSdkVersion 36" app/build.gradle
+req_grep "targetSdkVersion 36" app/build.gradle
+req_grep "sourceCompatibility JavaVersion.VERSION_17" app/build.gradle
+req_grep "targetCompatibility JavaVersion.VERSION_17" app/build.gradle
+req_grep "JvmTarget.fromTarget(\"17\")" app/build.gradle
+req_grep "JavaLanguageVersion.of(17)" app/build.gradle
 
 # Never allow credentials to be committed accidentally.
 # Do not scan source-code strings for PEM marker text because the app
@@ -50,8 +63,12 @@ if [ -n "$private_key_found" ]; then
   exit 1
 fi
 
-test -s signing/gitls-test.keystore
-test -s signing/keystore.properties
+for f in signing/gitls-test.keystore signing/keystore.properties; do
+  if [ ! -s "$f" ]; then
+    echo "::error::$f tidak ada atau kosong. Uploader (GITLS Updater / GitHub Publisher) menyaring file *.keystore secara default; gunakan signing/gitls-test.keystore.b64 (dipulihkan otomatis oleh langkah CI) atau jangan kecualikan file ini."
+    exit 1
+  fi
+done
 echo "Bundled TEST signing key: OK"
 
 # Basic XML validation for Android resources.
@@ -91,7 +108,7 @@ print("lateinit guard: OK")
 PY
 
 # Verify application id and version are present.
-grep -q 'applicationId "com.gitls.app"' app/build.gradle
-grep -q 'versionName' app/build.gradle
+req_grep 'applicationId "com.gitls.app"' app/build.gradle
+req_grep 'versionName' app/build.gradle
 
 echo "Preflight: OK"

@@ -42,6 +42,16 @@ jobs:
       - name: Make CI scripts executable
         run: chmod +x ./scripts/ci/preflight.sh ./gradlew
 
+      - name: Restore bundled test keystore from base64 (if filtered by uploader)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -s signing/gitls-test.keystore ] && [ -s signing/gitls-test.keystore.b64 ]; then
+            base64 -d signing/gitls-test.keystore.b64 > signing/gitls-test.keystore
+            echo "48a14ba5119beb41c572ffbcd3b68477a761642adf5790020ea365b79db2028d  signing/gitls-test.keystore" | sha256sum -c -
+            echo "Keystore TEST dipulihkan dari .b64 (identik dengan aslinya)."
+          fi
+
       - name: Preflight repository
         run: bash ./scripts/ci/preflight.sh
 
